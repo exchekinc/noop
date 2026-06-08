@@ -93,6 +93,15 @@ public final class BLEManager: NSObject, ObservableObject {
     /// True while the drain task is running (prevents a second drain task from launching).
     private var backfillDraining = false
 
+    /// Records WHOOP 5/MG puffin frames to a JSON file for protocol mapping. Passive (read-only on the
+    /// strap) and gated by the Settings → Experimental "Record puffin frames" toggle; a no-op for
+    /// WHOOP 4.0 and when the toggle is off. Lazy so it shares `state` after init. (Cherry-picked from
+    /// @j0b-dev's PR #20.)
+    private lazy var puffinRecorder = PuffinFrameRecorder(state: state)
+
+    /// Force the puffin capture buffer to disk so the Settings export/reveal targets a current file.
+    public func flushPuffinCaptures() { puffinRecorder.flush() }
+
     // MARK: CoreBluetooth
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -725,6 +734,7 @@ extension BLEManager: CBCentralManagerDelegate {
         keepAliveTimer?.cancel()
         keepAliveTimer = nil
         resetCharacteristics()
+        puffinRecorder.flush()   // persist any buffered puffin capture frames before reconnect
         Task { @MainActor in await collector?.flushStandardHR() }   // persist any buffered 0x2A37 HR
         if !intentionalDisconnect {
             log("Disconnected\(error.map { " — \($0.localizedDescription)" } ?? ""); rescanning in 3s")
@@ -1057,6 +1067,8 @@ extension BLEManager: CBPeripheralDelegate {
             if BLEManager.whoop5NotifyChars.contains(characteristic.uuid) {
                 for frame in reassembler.feed(bytes) {
                     router.handle(frame: frame)
+                    // Capture for protocol mapping (no-op unless the Settings toggle is on). PR #20.
+                    puffinRecorder.capture(frame: frame, char: characteristic.uuid)
                 }
             }
         }

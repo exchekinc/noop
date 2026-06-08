@@ -17,6 +17,22 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 1.7 — WHOOP 5/MG frame capture + protocol workbench
+
+- **New (Mac): opt-in WHOOP 5/MG frame capture.** Settings → Experimental → "Record puffin frames"
+  logs the strap's raw 5/MG ("puffin") frames — each stamped with a timestamp and your live heart
+  rate as ground-truth — to a JSON file, with Export / Reveal actions. Read-only on the strap, off by
+  default, and never touches WHOOP 4.0. This is how 5/MG owners can contribute the captures needed to
+  decode recovery / strain / sleep.
+- **Dev tooling:** a headless Linux capture workbench (`tools/linux-capture/`, Python + bleak) and a
+  `whoop-decode` CLI that decodes captures with the same `WhoopProtocol` decoder the apps ship — no
+  second decoder to drift. Plus hardware-verified WHOOP 5.0 bonding/session notes in
+  `docs/BLE_REVERSE_ENGINEERING.md` that confirm the v1.5 just-works-bond approach.
+- Cherry-picked from community PRs #19 and #20 by @j0b-dev — reviewed, build-verified, and
+  reimplemented for the repo.
+
+---
+
 ## 1.6 — Share strap logs, and a worn-status fix
 
 - **New (Android): Share strap log.** Settings → Strap → **"Share strap log"** writes the connection
