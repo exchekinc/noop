@@ -72,7 +72,37 @@ struct InsightsView: View {
         }
     }
 
+    /// One personal-experiment window length (and the matching baseline span).
+    private enum ExperimentLength: Int, CaseIterable, Identifiable {
+        case oneWeek = 7
+        case twoWeeks = 14
+        case fourWeeks = 28
+
+        var id: Int { rawValue }
+        var label: String {
+            switch self {
+            case .oneWeek:  return "7d"
+            case .twoWeeks: return "14d"
+            case .fourWeeks: return "28d"
+            }
+        }
+    }
+
     @State private var outcome: Outcome = .recovery
+
+    // MARK: Personal-experiment state (LOCAL ONLY — UserDefaults-backed, single user)
+    //
+    // A running n-of-1 plan: one behaviour, one outcome, a short window. All five
+    // keys mirror the Android SharedPreferences keys (InsightsScreen.kt) for parity.
+    @AppStorage("noop.experiment.behaviour")    private var experimentBehaviour = ""
+    @AppStorage("noop.experiment.outcome")      private var experimentOutcomeRaw = Outcome.recovery.rawValue
+    @AppStorage("noop.experiment.startedDay")   private var experimentStartedDay = ""
+    @AppStorage("noop.experiment.durationDays") private var experimentDurationDays = ExperimentLength.twoWeeks.rawValue
+    @AppStorage("noop.experiment.baselineDays") private var experimentBaselineDays = ExperimentLength.twoWeeks.rawValue
+
+    /// The journal catalog — read for `hiddenQuestions` so a behaviour the user has
+    /// hidden never resurfaces as an eligible experiment candidate (triage fix b).
+    @StateObject private var catalog = JournalCatalogStore()
 
     // MARK: Loaded state
 
@@ -125,6 +155,7 @@ struct InsightsView: View {
                     // journal card so the two daily-logging surfaces read as one
                     // "log today" block above the derived insights.
                     MindSection()
+                    experimentSection
                     if behaviours.isEmpty {
                         // No journal yet — explain, without dead-ending on a paid export.
                         NoopCard {
@@ -230,6 +261,457 @@ struct InsightsView: View {
     /// Called at load only — the series don't change after that.
     private func recomputeRelationships() {
         relationships = computeRelationships()
+    }
+
+    // MARK: - Personal experiment section
+    //
+    // A LOCAL-ONLY n-of-1 protocol: pick ONE behaviour you actually log, one outcome,
+    // and a short window, then compare the outcome on days you logged the behaviour
+    // (the intervention) against your behaviour-ABSENT days before the start (the
+    // baseline). The absent-day baseline mirrors the with/without model used by the
+    // Behaviour Effects section above, so "Baseline" vs "Intervention" is an honest
+    // present-vs-absent contrast rather than a raw pre/post window. Nothing leaves the
+    // device: state is @AppStorage and "Mark done" writes a normal journal answer.
+
+    private var experimentSection: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Personal Experiment",
+                          overline: "N-of-1 protocol",
+                          trailing: activeExperimentSnapshot?.phaseLabel ?? "Setup")
+            NoopCard {
+                if let snapshot = activeExperimentSnapshot {
+                    activeExperimentCard(snapshot)
+                } else {
+                    experimentSetupCard
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var experimentSetupCard: some View {
+        let candidates = experimentCandidates
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Run a clean personal test")
+                        .font(StrandFont.headline)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                    Text("Pick one behaviour you log, one outcome, and a short window. NOOP compares the days you log the behaviour against your behaviour-free days before the start.")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                StatePill("LOCAL ONLY", tone: .neutral, showsDot: false)
+            }
+
+            if candidates.isEmpty {
+                Text("Log at least one behaviour above before starting an experiment.")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 220), spacing: NoopMetrics.gap)],
+                    alignment: .leading,
+                    spacing: NoopMetrics.gap
+                ) {
+                    experimentField("Behaviour") {
+                        Picker("Behaviour", selection: experimentBehaviourBinding) {
+                            ForEach(candidates, id: \.self) { q in
+                                Text(verbatim: q).tag(q)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .accessibilityLabel("Experiment behaviour")
+                    }
+                    experimentField("Outcome") {
+                        SegmentedPillControl(Outcome.allCases, selection: experimentOutcomeBinding) { $0.label }
+                            .accessibilityLabel("Experiment outcome metric")
+                    }
+                    experimentField("Window") {
+                        SegmentedPillControl(ExperimentLength.allCases,
+                                             selection: experimentLengthBinding) { $0.label }
+                            .accessibilityLabel("Experiment window length")
+                    }
+                }
+
+                Button { startExperiment() } label: {
+                    Label("Start experiment", systemImage: "flask.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(StrandPalette.accent)
+                .disabled(resolvedExperimentBehaviour == nil)
+                .help("Start a local experiment using today's date as day one.")
+            }
+        }
+    }
+
+    private func activeExperimentCard(_ snapshot: ExperimentSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: snapshot.behavior)
+                        .font(StrandFont.headline)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                        .lineLimit(2)
+                    Text("Started \(snapshot.startDay) · testing \(snapshot.outcome.outcomeName.lowercased())")
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+                Spacer(minLength: 12)
+                StatePill(LocalizedStringKey(snapshot.phaseLabel), tone: snapshot.phaseTone,
+                          pulsing: snapshot.daysElapsed < snapshot.durationDays)
+            }
+
+            Text(experimentReading(snapshot))
+                .font(StrandFont.body)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 154), spacing: NoopMetrics.gap)],
+                alignment: .leading,
+                spacing: NoopMetrics.gap
+            ) {
+                experimentMeasure("Baseline",
+                                  value: snapshot.baselineMean.map { formatOutcome($0, as: snapshot.outcome) } ?? "—",
+                                  caption: "\(snapshot.baselineCount) days without it",
+                                  tint: StrandPalette.textSecondary)
+                experimentMeasure("Intervention",
+                                  value: snapshot.interventionMean.map { formatOutcome($0, as: snapshot.outcome) } ?? "—",
+                                  caption: "\(snapshot.interventionCount) logged days",
+                                  tint: StrandPalette.accent)
+                experimentMeasure("Change",
+                                  value: formatExperimentDelta(snapshot.delta, outcome: snapshot.outcome),
+                                  caption: snapshot.deltaCaption,
+                                  tint: experimentDeltaColor(snapshot))
+                experimentMeasure("Compliance",
+                                  value: "\(Int(snapshot.compliance.rounded()))%",
+                                  caption: snapshot.loggedToday ? "logged today" : "not logged today",
+                                  tint: snapshot.loggedToday ? StrandPalette.statusPositive : StrandPalette.statusWarning)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: snapshot.progress)
+                    .tint(StrandPalette.accent)
+                    .accessibilityLabel("Experiment progress")
+                    .accessibilityValue("\(snapshot.daysElapsed) of \(snapshot.durationDays) days")
+                HStack {
+                    Text("\(snapshot.daysElapsed) of \(snapshot.durationDays) days")
+                    Spacer()
+                    StatePill(LocalizedStringKey(snapshot.confidence.label),
+                              tone: snapshot.confidence.tone,
+                              showsDot: false)
+                }
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+            }
+
+            HStack(spacing: 10) {
+                Button { Task { await markExperimentToday(true) } } label: {
+                    Label("Mark done today", systemImage: "checkmark.circle.fill")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(StrandPalette.accent)
+                .disabled(snapshot.loggedToday)
+
+                Button { Task { await markExperimentToday(false) } } label: {
+                    Label("Skip today", systemImage: "xmark.circle")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+
+                Spacer(minLength: 8)
+
+                Button(role: .destructive) { endExperiment() } label: {
+                    Label("End", systemImage: "stop.circle")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+                .help("End the experiment plan. Journal and metric history stay untouched.")
+            }
+        }
+    }
+
+    private func experimentField<Content: View>(_ title: LocalizedStringKey,
+                                                @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(StrandFont.overline)
+                .tracking(StrandFont.overlineTracking)
+                .foregroundStyle(StrandPalette.textTertiary)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .topLeading)
+        .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(StrandPalette.hairline, lineWidth: 1))
+    }
+
+    private func experimentMeasure(_ label: LocalizedStringKey,
+                                   value: String,
+                                   caption: String,
+                                   tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .lineLimit(1)
+            Text(value)
+                .font(StrandFont.number(22))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(caption)
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+        .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(StrandPalette.hairline, lineWidth: 1))
+    }
+
+    /// Behaviours the user actually has data for: distinct logged journal questions
+    /// (`behaviours.keys`) ∪ imported-export questions, minus the catalog's hidden set.
+    /// Triage fix (a)/(b): we do NOT route this through `mergeCatalog`, which would inject
+    /// the whole starter catalog (and re-surface hidden behaviours) as eligible — so the
+    /// empty-state guard is real and only behaviours with history can be tested.
+    private var experimentCandidates: [String] {
+        let saved = experimentBehaviour.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hidden = Set(catalog.hiddenQuestions.map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
+        // Logged behaviours first (most relevant), then imported wording, then the saved
+        // selection so an in-flight pick never vanishes mid-edit.
+        let raw = behaviours.keys.sorted() + importedQuestions + (saved.isEmpty ? [] : [saved])
+        var seen = Set<String>()
+        var out: [String] = []
+        for q in raw {
+            let t = q.trimmingCharacters(in: .whitespaces)
+            let key = t.lowercased()
+            if !t.isEmpty, !hidden.contains(key), seen.insert(key).inserted { out.append(t) }
+        }
+        return out
+    }
+
+    private var resolvedExperimentBehaviour: String? {
+        let candidates = experimentCandidates
+        let saved = experimentBehaviour.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !saved.isEmpty, candidates.contains(saved) { return saved }
+        return candidates.first
+    }
+
+    private var experimentBehaviourBinding: Binding<String> {
+        Binding(
+            get: { resolvedExperimentBehaviour ?? "" },
+            set: { experimentBehaviour = $0 }
+        )
+    }
+
+    private var experimentOutcomeBinding: Binding<Outcome> {
+        Binding(
+            get: { Outcome(rawValue: experimentOutcomeRaw) ?? .recovery },
+            set: { experimentOutcomeRaw = $0.rawValue }
+        )
+    }
+
+    private var experimentLengthBinding: Binding<ExperimentLength> {
+        Binding(
+            get: { ExperimentLength(rawValue: experimentDurationDays) ?? .twoWeeks },
+            set: { experimentDurationDays = $0.rawValue }
+        )
+    }
+
+    private var activeExperimentSnapshot: ExperimentSnapshot? {
+        guard !experimentStartedDay.isEmpty,
+              let outcome = Outcome(rawValue: experimentOutcomeRaw),
+              let behavior = resolvedExperimentBehaviour
+        else { return nil }
+
+        let today = Repository.localDayKey(Date())
+        let duration = max(1, experimentDurationDays)
+        let outcomeDays = outcomeByKey[outcome.key] ?? [:]
+        let loggedDays = behaviours[behavior] ?? []
+
+        // Baseline = behaviour-ABSENT days BEFORE the start (with/without model, matching
+        // Behaviour Effects). Restricting to absent days is triage fix (c): "Baseline" vs
+        // "Intervention" is now an honest present-vs-absent contrast, not a raw pre/post window.
+        let baselineDays = outcomeDays.keys
+            .filter { $0 < experimentStartedDay && !loggedDays.contains($0) }
+            .sorted()
+            .suffix(max(1, experimentBaselineDays))
+        // Intervention = the first `duration` outcome days in the window where the behaviour
+        // WAS logged.
+        let interventionWindow = outcomeDays.keys
+            .filter { $0 >= experimentStartedDay && $0 <= today }
+            .sorted()
+            .prefix(duration)
+        let interventionDays = interventionWindow.filter { loggedDays.contains($0) }
+
+        let baselineValues = baselineDays.compactMap { outcomeDays[$0] }
+        let interventionValues = interventionDays.compactMap { outcomeDays[$0] }
+        let daysElapsed = max(1, min(duration, dayDistance(from: experimentStartedDay, to: today) + 1))
+        let complianceFraction = Double(interventionDays.count) / Double(max(daysElapsed, 1))
+        let confidence = experimentConfidence(baselineCount: baselineValues.count,
+                                              interventionCount: interventionValues.count,
+                                              compliance: complianceFraction)
+
+        return ExperimentSnapshot(
+            behavior: behavior,
+            outcome: outcome,
+            startDay: experimentStartedDay,
+            durationDays: duration,
+            daysElapsed: daysElapsed,
+            baselineMean: Self.mean(baselineValues),
+            baselineCount: baselineValues.count,
+            interventionMean: Self.mean(interventionValues),
+            interventionCount: interventionValues.count,
+            loggedToday: loggedDays.contains(today),
+            compliance: complianceFraction * 100,
+            confidence: confidence
+        )
+    }
+
+    private func startExperiment() {
+        guard let behavior = resolvedExperimentBehaviour else { return }
+        experimentBehaviour = behavior
+        if ExperimentLength(rawValue: experimentDurationDays) == nil {
+            experimentDurationDays = ExperimentLength.twoWeeks.rawValue
+        }
+        if Outcome(rawValue: experimentOutcomeRaw) == nil {
+            experimentOutcomeRaw = Outcome.recovery.rawValue
+        }
+        experimentBaselineDays = experimentDurationDays
+        experimentStartedDay = Repository.localDayKey(Date())
+    }
+
+    private func endExperiment() {
+        experimentStartedDay = ""
+    }
+
+    private func markExperimentToday(_ answeredYes: Bool) async {
+        guard let behavior = activeExperimentSnapshot?.behavior else { return }
+        await repo.saveJournalAnswer(day: Repository.localDayKey(Date()),
+                                     question: behavior,
+                                     answeredYes: answeredYes)
+        await load()
+    }
+
+    private func experimentConfidence(baselineCount: Int,
+                                      interventionCount: Int,
+                                      compliance: Double) -> ExperimentConfidence {
+        let pairedCount = min(baselineCount, interventionCount)
+        if pairedCount >= 10, compliance >= 0.65 {
+            return .init(label: "STRONGER SIGNAL", tone: .positive)
+        }
+        if pairedCount >= 5 {
+            return .init(label: "EARLY SIGNAL", tone: .accent)
+        }
+        return .init(label: "LOW SIGNAL", tone: .warning)
+    }
+
+    private func experimentReading(_ snapshot: ExperimentSnapshot) -> String {
+        guard let delta = snapshot.delta else {
+            return "Collect a few logged intervention days before reading the effect. Baseline and imported metrics stay in place."
+        }
+        let absDelta = formatExperimentDelta(abs(delta), outcome: snapshot.outcome, includeSign: false)
+        if abs(delta) < 0.05 {
+            return "\(snapshot.outcome.outcomeName) is flat against baseline on logged intervention days."
+        }
+        let movedGood = snapshot.outcome.higherIsBetter ? delta > 0 : delta < 0
+        return "\(snapshot.outcome.outcomeName) is \(absDelta) \(movedGood ? "better" : "worse") than baseline on days you logged this behaviour."
+    }
+
+    private func experimentDeltaColor(_ snapshot: ExperimentSnapshot) -> Color {
+        guard let delta = snapshot.delta, abs(delta) >= 0.05 else {
+            return StrandPalette.textTertiary
+        }
+        let movedGood = snapshot.outcome.higherIsBetter ? delta > 0 : delta < 0
+        return movedGood ? StrandPalette.statusPositive : StrandPalette.statusCritical
+    }
+
+    private func formatExperimentDelta(_ delta: Double?,
+                                       outcome: Outcome,
+                                       includeSign: Bool = true) -> String {
+        guard let delta else { return "—" }
+        let prefix: String
+        if includeSign {
+            prefix = delta > 0 ? "+" : (delta < 0 ? "−" : "")
+        } else {
+            prefix = ""
+        }
+        let absDelta = abs(delta)
+        switch outcome {
+        case .recovery, .sleep:
+            return "\(prefix)\(Int(absDelta.rounded()))%"
+        case .hrv:
+            return "\(prefix)\(Int(absDelta.rounded())) ms"
+        case .rhr:
+            return "\(prefix)\(Int(absDelta.rounded())) bpm"
+        }
+    }
+
+    private func dayDistance(from start: String, to end: String) -> Int {
+        guard let startDate = Self.dateFromDayKey(start),
+              let endDate = Self.dateFromDayKey(end)
+        else { return 0 }
+        return Calendar.current.dateComponents([.day], from: startDate, to: endDate).day ?? 0
+    }
+
+    private static func dateFromDayKey(_ key: String) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+        return components.date
+    }
+
+    private static func mean(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private struct ExperimentSnapshot {
+        let behavior: String
+        let outcome: Outcome
+        let startDay: String
+        let durationDays: Int
+        let daysElapsed: Int
+        let baselineMean: Double?
+        let baselineCount: Int
+        let interventionMean: Double?
+        let interventionCount: Int
+        let loggedToday: Bool
+        let compliance: Double
+        let confidence: ExperimentConfidence
+
+        var progress: Double { min(1, Double(daysElapsed) / Double(max(durationDays, 1))) }
+        var phaseLabel: String {
+            daysElapsed >= durationDays ? "COMPLETE" : "DAY \(daysElapsed)/\(durationDays)"
+        }
+        var phaseTone: StrandTone { daysElapsed >= durationDays ? .positive : .accent }
+        var delta: Double? {
+            guard let interventionMean, let baselineMean else { return nil }
+            return interventionMean - baselineMean
+        }
+        var deltaCaption: String {
+            guard delta != nil else { return "needs baseline + logged days" }
+            return "vs behaviour-free baseline"
+        }
+    }
+
+    private struct ExperimentConfidence {
+        let label: String
+        let tone: StrandTone
     }
 
     // MARK: - Behaviour effects section
@@ -496,6 +978,13 @@ struct InsightsView: View {
 
     /// Format an outcome value with sensible units for the selected metric.
     private func formatOutcome(_ v: Double) -> String {
+        formatOutcome(v, as: outcome)
+    }
+
+    /// Format an outcome value with sensible units for a specific metric (used by the
+    /// experiment card, which formats against its own stored outcome rather than the
+    /// segmented selection).
+    private func formatOutcome(_ v: Double, as outcome: Outcome) -> String {
         switch outcome {
         case .recovery, .sleep: return "\(Int(v.rounded()))%"
         case .hrv:              return "\(Int(v.rounded())) ms"

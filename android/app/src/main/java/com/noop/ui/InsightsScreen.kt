@@ -1,5 +1,9 @@
 package com.noop.ui
 
+import android.content.Context
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,11 +11,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,12 +38,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.data.DailyMetric
 import com.noop.data.JournalEntry
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -178,6 +192,16 @@ fun InsightsScreen(vm: AppViewModel) {
     // Selected outcome metric for the behaviour-effects half.
     var outcome by remember { mutableStateOf(Outcome.Recovery) }
 
+    // --- Personal-experiment state (LOCAL ONLY — SharedPreferences, parity with the
+    //     Swift @AppStorage keys). `experimentSeq` bumps after a save so the snapshot
+    //     and compliance refresh immediately, matching the journal card's pattern. ---
+    var experimentSeq by remember { mutableStateOf(0) }
+    var experimentBehaviour by remember { mutableStateOf(loadExperimentString(ctx, EXP_BEHAVIOUR)) }
+    var experimentOutcomeName by remember { mutableStateOf(loadExperimentString(ctx, EXP_OUTCOME)) }
+    var experimentStartedDay by remember { mutableStateOf(loadExperimentString(ctx, EXP_STARTED)) }
+    var experimentDurationDays by remember { mutableStateOf(loadExperimentInt(ctx, EXP_DURATION, ExperimentLength.TwoWeeks.days)) }
+    var experimentBaselineDays by remember { mutableStateOf(loadExperimentInt(ctx, EXP_BASELINE, ExperimentLength.TwoWeeks.days)) }
+
     // Build outcome day-maps + ordered series off the cached daily metrics. Cheap and
     // recomputed only when `days` changes (not on every recomposition).
     val model = remember(days, behaviours) { buildModel(days, behaviours) }
@@ -240,6 +264,77 @@ fun InsightsScreen(vm: AppViewModel) {
         // --- Mind: daily mood check-in + mood ↔ body correlations (Swift Mind-lane
         //     mirror; storage contract + footnote shared verbatim across platforms) ---
         MindSection(vm)
+
+        Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
+
+        // --- Personal experiment (LOCAL ONLY n-of-1 protocol) ------------------
+        run {
+            // Candidates are gated to behaviours the user actually has data for —
+            // logged journal questions ∪ imported wording, minus hidden — NOT the
+            // starter catalog (triage fix a/b). Empty → real empty-state guard.
+            val candidates = experimentCandidates(behaviours, importedQuestions, hiddenQuestions, experimentBehaviour)
+            val expOutcome = Outcome.entries.firstOrNull { it.outcomeName == experimentOutcomeName } ?: Outcome.Recovery
+            val resolvedBehaviour = resolveExperimentBehaviour(candidates, experimentBehaviour)
+            val snapshot = remember(model, behaviours, experimentStartedDay, experimentOutcomeName, experimentDurationDays, experimentBaselineDays, experimentSeq) {
+                buildExperimentSnapshot(
+                    model = model,
+                    behaviours = behaviours,
+                    startedDay = experimentStartedDay,
+                    outcome = expOutcome,
+                    behaviour = resolvedBehaviour,
+                    durationDays = experimentDurationDays,
+                    baselineDays = experimentBaselineDays,
+                )
+            }
+
+            ExperimentSection(
+                snapshot = snapshot,
+                candidates = candidates,
+                resolvedBehaviour = resolvedBehaviour,
+                outcome = expOutcome,
+                length = ExperimentLength.fromDays(experimentDurationDays),
+                onBehaviour = {
+                    experimentBehaviour = it
+                    saveExperimentString(ctx, EXP_BEHAVIOUR, it)
+                },
+                onOutcome = {
+                    experimentOutcomeName = it.outcomeName
+                    saveExperimentString(ctx, EXP_OUTCOME, it.outcomeName)
+                },
+                onLength = {
+                    experimentDurationDays = it.days
+                    saveExperimentInt(ctx, EXP_DURATION, it.days)
+                },
+                onStart = {
+                    val behaviour = resolvedBehaviour
+                    if (behaviour != null) {
+                        experimentBehaviour = behaviour
+                        saveExperimentString(ctx, EXP_BEHAVIOUR, behaviour)
+                        experimentBaselineDays = experimentDurationDays
+                        saveExperimentInt(ctx, EXP_BASELINE, experimentDurationDays)
+                        val today = journalDayKey(0L)
+                        experimentStartedDay = today
+                        saveExperimentString(ctx, EXP_STARTED, today)
+                    }
+                },
+                onEnd = {
+                    experimentStartedDay = ""
+                    saveExperimentString(ctx, EXP_STARTED, "")
+                },
+                onMark = { answeredYes ->
+                    val behaviour = snapshot?.behavior
+                    if (behaviour != null) {
+                        scope.launch {
+                            vm.repo.upsertJournal(
+                                listOf(JournalEntry(JOURNAL_DEVICE_ID, journalDayKey(0L), behaviour, answeredYes)),
+                            )
+                            journalSeq++       // refresh behaviours map (logged-today, compliance)
+                            experimentSeq++    // refresh the snapshot
+                        }
+                    }
+                },
+            )
+        }
 
         Spacer(Modifier.height(Metrics.sectionGap - 20.dp))
 
@@ -415,6 +510,589 @@ private fun EffectCard(e: BehaviorEffect, outcome: Outcome) {
             }
         }
     }
+}
+
+// MARK: - Personal experiment section
+//
+// A LOCAL-ONLY n-of-1 protocol mirroring the Swift InsightsView experiment section:
+// pick ONE behaviour you actually log, one outcome, and a short window, then compare
+// the outcome on days you logged the behaviour (the intervention) against your
+// behaviour-ABSENT days before the start (the baseline). The absent-day baseline
+// matches the with/without model used by Behaviour Effects above, so "Baseline" vs
+// "Intervention" is an honest present-vs-absent contrast — not a raw pre/post window.
+// Nothing leaves the device: state is SharedPreferences and "Mark done" writes a
+// normal journal answer.
+
+/** One experiment window length (and the matching baseline span). */
+private enum class ExperimentLength(val days: Int, val label: String) {
+    OneWeek(7, "7d"),
+    TwoWeeks(14, "14d"),
+    FourWeeks(28, "28d");
+
+    companion object {
+        fun fromDays(d: Int): ExperimentLength = entries.firstOrNull { it.days == d } ?: TwoWeeks
+    }
+}
+
+/** A snapshot of the running experiment, computed off the cached outcome day-maps. */
+private data class ExperimentSnapshot(
+    val behavior: String,
+    val outcome: Outcome,
+    val startDay: String,
+    val durationDays: Int,
+    val daysElapsed: Int,
+    val baselineMean: Double?,
+    val baselineCount: Int,
+    val interventionMean: Double?,
+    val interventionCount: Int,
+    val loggedToday: Boolean,
+    /** 0…100 percent. */
+    val compliance: Double,
+    val confidence: ExperimentConfidence,
+) {
+    val progress: Float get() = (daysElapsed.toFloat() / durationDays.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val phaseLabel: String get() =
+        if (daysElapsed >= durationDays) "COMPLETE" else "DAY $daysElapsed/$durationDays"
+    val phaseTone: StrandTone get() =
+        if (daysElapsed >= durationDays) StrandTone.Positive else StrandTone.Accent
+    val delta: Double? get() {
+        val i = interventionMean ?: return null
+        val b = baselineMean ?: return null
+        return i - b
+    }
+    val deltaCaption: String get() =
+        if (delta == null) "needs baseline + logged days" else "vs behaviour-free baseline"
+}
+
+private data class ExperimentConfidence(val label: String, val tone: StrandTone)
+
+@Composable
+private fun ExperimentSection(
+    snapshot: ExperimentSnapshot?,
+    candidates: List<String>,
+    resolvedBehaviour: String?,
+    outcome: Outcome,
+    length: ExperimentLength,
+    onBehaviour: (String) -> Unit,
+    onOutcome: (Outcome) -> Unit,
+    onLength: (ExperimentLength) -> Unit,
+    onStart: () -> Unit,
+    onEnd: () -> Unit,
+    onMark: (Boolean) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        SectionHeader(
+            "Personal Experiment",
+            overline = "N-of-1 protocol",
+            trailing = snapshot?.phaseLabel ?: "Setup",
+        )
+        NoopCard {
+            if (snapshot != null) {
+                ActiveExperimentCard(snapshot, onMark = onMark, onEnd = onEnd)
+            } else {
+                ExperimentSetupCard(
+                    candidates = candidates,
+                    resolvedBehaviour = resolvedBehaviour,
+                    outcome = outcome,
+                    length = length,
+                    onBehaviour = onBehaviour,
+                    onOutcome = onOutcome,
+                    onLength = onLength,
+                    onStart = onStart,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExperimentSetupCard(
+    candidates: List<String>,
+    resolvedBehaviour: String?,
+    outcome: Outcome,
+    length: ExperimentLength,
+    onBehaviour: (String) -> Unit,
+    onOutcome: (Outcome) -> Unit,
+    onLength: (ExperimentLength) -> Unit,
+    onStart: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Run a clean personal test", style = NoopType.headline, color = Palette.textPrimary)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Pick one behaviour you log, one outcome, and a short window. NOOP " +
+                        "compares the days you log the behaviour against your behaviour-free " +
+                        "days before the start.",
+                    style = NoopType.subhead,
+                    color = Palette.textSecondary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            StatePill("LOCAL ONLY", tone = StrandTone.Neutral, showsDot = false)
+        }
+
+        if (candidates.isEmpty()) {
+            Text(
+                "Log at least one behaviour above before starting an experiment.",
+                style = NoopType.subhead,
+                color = Palette.textTertiary,
+            )
+        } else {
+            ExperimentField("Behaviour") {
+                ExperimentBehaviourPicker(
+                    candidates = candidates,
+                    selection = resolvedBehaviour ?: candidates.first(),
+                    onSelect = onBehaviour,
+                )
+            }
+            ExperimentField("Outcome") {
+                SegmentedPillControl(
+                    items = Outcome.entries.toList(),
+                    selection = outcome,
+                    label = { it.label },
+                    onSelect = onOutcome,
+                )
+            }
+            ExperimentField("Window") {
+                SegmentedPillControl(
+                    items = ExperimentLength.entries.toList(),
+                    selection = length,
+                    label = { it.label },
+                    onSelect = onLength,
+                )
+            }
+
+            Button(
+                onClick = onStart,
+                enabled = resolvedBehaviour != null,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Palette.accent,
+                    contentColor = Palette.surfaceBase,
+                    disabledContainerColor = Palette.surfaceInset,
+                    disabledContentColor = Palette.textTertiary,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Start experiment" },
+            ) {
+                Text("Start experiment", style = NoopType.headline)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveExperimentCard(
+    snapshot: ExperimentSnapshot,
+    onMark: (Boolean) -> Unit,
+    onEnd: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    snapshot.behavior,
+                    style = NoopType.headline,
+                    color = Palette.textPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Started ${snapshot.startDay} · testing ${snapshot.outcome.outcomeName.lowercase(Locale.US)}",
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            StatePill(
+                snapshot.phaseLabel,
+                tone = snapshot.phaseTone,
+                pulsing = snapshot.daysElapsed < snapshot.durationDays,
+            )
+        }
+
+        Text(
+            experimentReading(snapshot),
+            style = NoopType.body,
+            color = Palette.textSecondary,
+        )
+
+        // Baseline / Intervention / Change / Compliance measures.
+        Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+            ExperimentMeasure(
+                modifier = Modifier.weight(1f),
+                label = "Baseline",
+                value = snapshot.baselineMean?.let { snapshot.outcome.format(it) } ?: "—",
+                caption = "${snapshot.baselineCount} days without it",
+                tint = Palette.textSecondary,
+            )
+            ExperimentMeasure(
+                modifier = Modifier.weight(1f),
+                label = "Intervention",
+                value = snapshot.interventionMean?.let { snapshot.outcome.format(it) } ?: "—",
+                caption = "${snapshot.interventionCount} logged days",
+                tint = Palette.accent,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+            ExperimentMeasure(
+                modifier = Modifier.weight(1f),
+                label = "Change",
+                value = formatExperimentDelta(snapshot.delta, snapshot.outcome),
+                caption = snapshot.deltaCaption,
+                tint = experimentDeltaColor(snapshot),
+            )
+            ExperimentMeasure(
+                modifier = Modifier.weight(1f),
+                label = "Compliance",
+                value = "${snapshot.compliance.roundToInt()}%",
+                caption = if (snapshot.loggedToday) "logged today" else "not logged today",
+                tint = if (snapshot.loggedToday) Palette.statusPositive else Palette.statusWarning,
+            )
+        }
+
+        // Progress bar + day count + confidence pill.
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Palette.hairline)
+                    .semantics {
+                        contentDescription =
+                            "Experiment progress ${snapshot.daysElapsed} of ${snapshot.durationDays} days"
+                    },
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(snapshot.progress)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Palette.accent),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "${snapshot.daysElapsed} of ${snapshot.durationDays} days",
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                    modifier = Modifier.weight(1f),
+                )
+                StatePill(snapshot.confidence.label, tone = snapshot.confidence.tone, showsDot = false)
+            }
+        }
+
+        // Mark done / Skip / End.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(
+                onClick = { onMark(true) },
+                enabled = !snapshot.loggedToday,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Palette.accent,
+                    contentColor = Palette.surfaceBase,
+                    disabledContainerColor = Palette.surfaceInset,
+                    disabledContentColor = Palette.textTertiary,
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { contentDescription = "Mark done today" },
+            ) {
+                Text("Mark done", style = NoopType.subhead, maxLines = 1)
+            }
+            OutlinedButton(
+                onClick = { onMark(false) },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.textPrimary),
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { contentDescription = "Skip today" },
+            ) {
+                Text("Skip", style = NoopType.subhead, maxLines = 1)
+            }
+            OutlinedButton(
+                onClick = onEnd,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.statusCritical),
+                modifier = Modifier.semantics { contentDescription = "End experiment" },
+            ) {
+                Text("End", style = NoopType.subhead, maxLines = 1)
+            }
+        }
+    }
+}
+
+/** A labelled inset well wrapping one setup control. */
+@Composable
+private fun ExperimentField(title: String, content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Palette.surfaceInset)
+            .border(1.dp, Palette.hairline, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Overline(title, color = Palette.textTertiary)
+        content()
+    }
+}
+
+/** One inset measure cell: label, big number, caption. */
+@Composable
+private fun ExperimentMeasure(
+    label: String,
+    value: String,
+    caption: String,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .heightIn(min = 92.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Palette.surfaceInset)
+            .border(1.dp, Palette.hairline, RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(label, style = NoopType.caption, color = Palette.textTertiary, maxLines = 1)
+        Text(
+            value,
+            style = NoopType.number(22f),
+            color = tint,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(caption, style = NoopType.footnote, color = Palette.textTertiary, maxLines = 2)
+    }
+}
+
+/** A menu-style behaviour picker (mirrors the Swift Picker(.menu) style). */
+@Composable
+private fun ExperimentBehaviourPicker(
+    candidates: List<String>,
+    selection: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(Palette.surfaceBase)
+                .border(1.dp, Palette.hairline, RoundedCornerShape(6.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .semantics { contentDescription = "Experiment behaviour: $selection" },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                selection,
+                style = NoopType.subhead,
+                color = Palette.textPrimary,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text("▾", style = NoopType.subhead, color = Palette.textTertiary)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            candidates.forEach { q ->
+                DropdownMenuItem(
+                    text = { Text(q, style = NoopType.subhead, color = Palette.textPrimary) },
+                    onClick = {
+                        onSelect(q)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Experiment computation (mirrors Swift activeExperimentSnapshot)
+
+/**
+ * Behaviours the user actually has data for: distinct logged journal questions
+ * (`behaviours.keys`) ∪ imported-export questions, minus the catalog's hidden set.
+ * Triage fix (a)/(b): we do NOT route this through `mergeJournalCatalog`, which would
+ * inject the whole starter catalog (and re-surface hidden behaviours) — so only
+ * behaviours with real history are eligible, and the empty-state guard is real.
+ */
+private fun experimentCandidates(
+    behaviours: Map<String, Set<String>>,
+    importedQuestions: List<String>,
+    hidden: List<String>,
+    saved: String,
+): List<String> {
+    val hiddenSet = hidden.map { it.trim().lowercase(Locale.US) }.toHashSet()
+    val savedTrim = saved.trim()
+    val raw = behaviours.keys.sorted() + importedQuestions +
+        (if (savedTrim.isEmpty()) emptyList() else listOf(savedTrim))
+    val seen = HashSet<String>()
+    val out = mutableListOf<String>()
+    for (q in raw) {
+        val t = q.trim()
+        val key = t.lowercase(Locale.US)
+        if (t.isNotEmpty() && key !in hiddenSet && seen.add(key)) out.add(t)
+    }
+    return out
+}
+
+/** The saved behaviour if still eligible, else the first candidate (or null when empty). */
+private fun resolveExperimentBehaviour(candidates: List<String>, saved: String): String? {
+    val savedTrim = saved.trim()
+    if (savedTrim.isNotEmpty() && candidates.contains(savedTrim)) return savedTrim
+    return candidates.firstOrNull()
+}
+
+private fun buildExperimentSnapshot(
+    model: InsightModel,
+    behaviours: Map<String, Set<String>>,
+    startedDay: String,
+    outcome: Outcome,
+    behaviour: String?,
+    durationDays: Int,
+    baselineDays: Int,
+): ExperimentSnapshot? {
+    if (startedDay.isEmpty() || behaviour == null) return null
+
+    val today = journalDayKey(0L)
+    val duration = durationDays.coerceAtLeast(1)
+    val outcomeDays = model.outcomeByDay[outcome] ?: emptyMap()
+    val loggedDays = behaviours[behaviour] ?: emptySet()
+
+    // Baseline = behaviour-ABSENT days BEFORE the start (with/without model, matching
+    // Behaviour Effects). Restricting to absent days is triage fix (c): "Baseline" vs
+    // "Intervention" is an honest present-vs-absent contrast, not a raw pre/post window.
+    val baselineKeys = outcomeDays.keys
+        .filter { it < startedDay && it !in loggedDays }
+        .sorted()
+        .takeLast(baselineDays.coerceAtLeast(1))
+    // Intervention = the first `duration` outcome days from the start where the
+    // behaviour WAS logged.
+    val interventionWindow = outcomeDays.keys
+        .filter { it >= startedDay && it <= today }
+        .sorted()
+        .take(duration)
+    val interventionKeys = interventionWindow.filter { it in loggedDays }
+
+    val baselineValues = baselineKeys.mapNotNull { outcomeDays[it] }
+    val interventionValues = interventionKeys.mapNotNull { outcomeDays[it] }
+    val daysElapsed = (dayDistance(startedDay, today) + 1).coerceIn(1, duration)
+    val complianceFraction = interventionKeys.size.toDouble() / daysElapsed.coerceAtLeast(1)
+    val confidence = experimentConfidence(baselineValues.size, interventionValues.size, complianceFraction)
+
+    return ExperimentSnapshot(
+        behavior = behaviour,
+        outcome = outcome,
+        startDay = startedDay,
+        durationDays = duration,
+        daysElapsed = daysElapsed,
+        baselineMean = mean(baselineValues),
+        baselineCount = baselineValues.size,
+        interventionMean = mean(interventionValues),
+        interventionCount = interventionValues.size,
+        loggedToday = today in loggedDays,
+        compliance = complianceFraction * 100,
+        confidence = confidence,
+    )
+}
+
+private fun experimentConfidence(
+    baselineCount: Int,
+    interventionCount: Int,
+    compliance: Double,
+): ExperimentConfidence {
+    val paired = minOf(baselineCount, interventionCount)
+    return when {
+        paired >= 10 && compliance >= 0.65 -> ExperimentConfidence("STRONGER SIGNAL", StrandTone.Positive)
+        paired >= 5 -> ExperimentConfidence("EARLY SIGNAL", StrandTone.Accent)
+        else -> ExperimentConfidence("LOW SIGNAL", StrandTone.Warning)
+    }
+}
+
+private fun experimentReading(s: ExperimentSnapshot): String {
+    val delta = s.delta
+        ?: return "Collect a few logged intervention days before reading the effect. " +
+            "Baseline and imported metrics stay in place."
+    val absStr = formatExperimentDelta(abs(delta), s.outcome, includeSign = false)
+    if (abs(delta) < 0.05) {
+        return "${s.outcome.outcomeName} is flat against baseline on logged intervention days."
+    }
+    val movedGood = if (s.outcome.higherIsBetter) delta > 0 else delta < 0
+    return "${s.outcome.outcomeName} is $absStr ${if (movedGood) "better" else "worse"} " +
+        "than baseline on days you logged this behaviour."
+}
+
+private fun experimentDeltaColor(s: ExperimentSnapshot): Color {
+    val delta = s.delta
+    if (delta == null || abs(delta) < 0.05) return Palette.textTertiary
+    val movedGood = if (s.outcome.higherIsBetter) delta > 0 else delta < 0
+    return if (movedGood) Palette.statusPositive else Palette.statusCritical
+}
+
+private fun formatExperimentDelta(delta: Double?, outcome: Outcome, includeSign: Boolean = true): String {
+    if (delta == null) return "—"
+    val prefix = if (!includeSign) "" else if (delta > 0) "+" else if (delta < 0) "−" else ""
+    val v = abs(delta).roundToInt()
+    return when (outcome) {
+        Outcome.Recovery, Outcome.Sleep -> "$prefix$v%"
+        Outcome.Hrv -> "$prefix$v ms"
+        Outcome.Rhr -> "$prefix$v bpm"
+    }
+}
+
+/** Whole-day distance between two yyyy-MM-dd keys (0 if either is unparseable). */
+private fun dayDistance(start: String, end: String): Int {
+    return try {
+        ChronoUnit.DAYS.between(LocalDate.parse(start), LocalDate.parse(end)).toInt()
+    } catch (_: Exception) {
+        0
+    }
+}
+
+private fun mean(values: List<Double>): Double? =
+    if (values.isEmpty()) null else values.sum() / values.size
+
+// MARK: - Experiment persistence (SharedPreferences — parity with Swift @AppStorage keys)
+
+private const val EXP_PREFS = "noop_prefs"
+private const val EXP_BEHAVIOUR = "noop.experiment.behaviour"
+private const val EXP_OUTCOME = "noop.experiment.outcome"
+private const val EXP_STARTED = "noop.experiment.startedDay"
+private const val EXP_DURATION = "noop.experiment.durationDays"
+private const val EXP_BASELINE = "noop.experiment.baselineDays"
+
+private fun loadExperimentString(context: Context, key: String): String =
+    context.getSharedPreferences(EXP_PREFS, Context.MODE_PRIVATE).getString(key, "") ?: ""
+
+private fun saveExperimentString(context: Context, key: String, value: String) {
+    context.getSharedPreferences(EXP_PREFS, Context.MODE_PRIVATE).edit().putString(key, value).apply()
+}
+
+private fun loadExperimentInt(context: Context, key: String, default: Int): Int =
+    context.getSharedPreferences(EXP_PREFS, Context.MODE_PRIVATE).getInt(key, default)
+
+private fun saveExperimentInt(context: Context, key: String, value: Int) {
+    context.getSharedPreferences(EXP_PREFS, Context.MODE_PRIVATE).edit().putInt(key, value).apply()
 }
 
 // MARK: - Metric relationships section

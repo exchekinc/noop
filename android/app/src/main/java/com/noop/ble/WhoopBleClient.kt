@@ -86,6 +86,11 @@ data class LiveState(
     val encryptedBond: Boolean = false,
     val heartRate: Int? = null,
     val rr: List<Int> = emptyList(),
+    /** Rolling UI buffer of recent R-R intervals (capped, oldest dropped first). The standard BLE HR
+     *  notification usually carries only one or two intervals per packet, so the Live console needs a
+     *  short history to render a moving R-R strip / rolling RMSSD. Appended (never replaced) via
+     *  [withRRIntervals]; emptied by [clearedBiometrics]. Twin of macOS LiveState.rrRecent (PR#191). */
+    val rrRecent: List<Int> = emptyList(),
     val batteryPct: Double? = null,
     /** Charging flag from BATTERY_LEVEL events — wire observation: u8 bit0 (4.0 @26 / 5.0 @30,
      *  ~every 8 min on captured links). Flag only; battery % keeps its family source (#77).
@@ -133,7 +138,23 @@ data class LiveState(
      *  the R22 deep stream actually flowing in realtime. 0 with flags accepted = enable taken but no deep
      *  data yet. Twin of macOS LiveState.deepPacketsThisSession. (#174) */
     val deepPacketsThisSession: Int = 0,
-)
+) {
+    /** Set the fresh-packet [rr] AND append the valid intervals onto the bounded [rrRecent] rolling
+     *  buffer (oldest fall off first). Non-positive sentinels are dropped from the rolling buffer.
+     *  Twin of macOS LiveState.setRRIntervals (PR#191). */
+    fun withRRIntervals(intervals: List<Int>, recentLimit: Int = 60): LiveState {
+        val valid = intervals.filter { it > 0 }
+        if (valid.isEmpty()) return copy(rr = intervals)
+        val merged = rrRecent + valid
+        val capped = if (merged.size > recentLimit) merged.takeLast(recentLimit) else merged
+        return copy(rr = intervals, rrRecent = capped)
+    }
+
+    /** Blank all live biometric readouts (HR + R-R + the rolling buffer) so a stale heart rate or R-R
+     *  strip can't outlive the link. Applied on disconnect alongside the charging/bond clears. Twin of
+     *  macOS LiveState.clearBiometrics (PR#191). */
+    fun clearedBiometrics(): LiveState = copy(heartRate = null, rr = emptyList(), rrRecent = emptyList())
+}
 
 /**
  * Android CoreBluetooth-equivalent engine for the WHOOP 4.0.
@@ -1468,8 +1489,9 @@ class WhoopBleClient(
                 }
                 // The realtime stream usually reports rr_count=0; only update R-R when this frame
                 // actually carries intervals, so we don't wipe R-R sourced from the 0x2A37 profile.
+                // withRRIntervals also feeds the Live console's rolling rrRecent buffer.
                 intArrayValue(parsed.parsed["rr_intervals"])?.let { rr ->
-                    if (rr.isNotEmpty()) _state.value = _state.value.copy(rr = rr)
+                    if (rr.isNotEmpty()) _state.value = _state.value.withRRIntervals(rr)
                 }
             }
 
@@ -1612,8 +1634,9 @@ class WhoopBleClient(
             }
         }
 
-        // R-R: the standard profile is the reliable source — surface whenever present.
-        if (rr.isNotEmpty()) _state.value = _state.value.copy(rr = rr)
+        // R-R: the standard profile is the reliable source — surface whenever present. withRRIntervals
+        // also feeds the Live console's rolling rrRecent buffer.
+        if (rr.isNotEmpty()) _state.value = _state.value.withRRIntervals(rr)
         // HR: accept only physiologically plausible values; reject 0/garbage (off-wrist).
         if (hr in 30..220) {
             _state.value = _state.value.copy(heartRate = hr)
@@ -2499,8 +2522,11 @@ class WhoopBleClient(
         ioScope.launch { flushLive(); flushStandardHr() }
 
         // Reset all per-connection state and clear UI flags (incl. the syncing pill — a dropped link
-        // mid-offload must not leave "Syncing strap history…" stuck on, #77).
-        _state.value = _state.value.copy(
+        // mid-offload must not leave "Syncing strap history…" stuck on, #77). clearedBiometrics() also
+        // blanks HR / R-R / the rolling buffer so a stale heart rate or R-R strip can't outlive the link
+        // (parity with macOS LiveState.clearBiometrics — PR#191; the Android client previously cleared
+        // `charging` but left heartRate/rr stale).
+        _state.value = _state.value.clearedBiometrics().copy(
             connected = false, bonded = false, encryptedBond = false,
             backfilling = false, syncChunksThisSession = 0,
             charging = null,   // a stale charging flag must not outlive the link

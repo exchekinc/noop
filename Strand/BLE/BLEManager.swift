@@ -1254,8 +1254,9 @@ public final class BLEManager: NSObject, ObservableObject {
             log("HR notify: \(m.hr) bpm\(plausibility), rr=\(m.rr.count)")
         }
         // R-R: the standard profile is the RELIABLE source (the custom REALTIME_DATA stream
-        // usually reports rr_count=0), so always surface intervals when present.
-        if !m.rr.isEmpty { state.rr = m.rr }
+        // usually reports rr_count=0), so always surface intervals when present. setRRIntervals also
+        // feeds the Live console's rolling rrRecent buffer.
+        if !m.rr.isEmpty { state.setRRIntervals(m.rr) }
         // HR: the standard 0x2A37 profile is the RELIABLE source (BLE-standard, ~1Hz). Let it
         // drive the value whenever it's physiologically plausible; reject 0/garbage (off-wrist).
         // AppModel medians these into a stable display value.
@@ -1330,6 +1331,7 @@ extension BLEManager: CBCentralManagerDelegate {
         state.connected = false
         state.encryptedBond = false   // cleared with didBond; next session must re-prove the bond (#69)
         state.charging = nil          // a stale charging flag must not outlive the link
+        state.clearBiometrics()       // and a stale HR / R-R must not outlive the link either
         didBond = false
         whoop5RealtimeArmed = false
         whoop5SessionStarted = false

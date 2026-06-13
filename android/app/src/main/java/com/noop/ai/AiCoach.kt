@@ -71,7 +71,7 @@ class AiCoach(private val repo: WhoopRepository) {
         require(history.last().role == "user") { "The last message must be your question." }
 
         // Include the user's data ONLY with explicit consent; otherwise a note, never their numbers.
-        val grounded = if (consent) {
+        val groundedFull = if (consent) {
             // Merged read, NOT raw days(): a live-strap user's scores live under "my-whoop-noop"
             // and a raw read misses them — the coach then claimed it had no data. (#124)
             val days = runCatching { repo.daysMerged(deviceId) }.getOrDefault(emptyList())
@@ -79,6 +79,11 @@ class AiCoach(private val repo: WhoopRepository) {
         } else {
             injectContext(history, NO_CONSENT_NOTE)
         }
+
+        // Slide a window over a long conversation so the history can't crowd out the reply on a
+        // small local context window (e.g. Ollama's 2048-token default). The first user turn carries
+        // the data context, so it is always kept; the middle is dropped, the recent tail retained.
+        val grounded = trimmedHistory(groundedFull, MAX_HISTORY_TURNS)
 
         when (provider) {
             AiProvider.OPENAI ->
@@ -280,14 +285,18 @@ class AiCoach(private val repo: WhoopRepository) {
         if (code !in 200..299) throw httpError(provider, code, text)
 
         val json = parse(text)
-        val content = json.optJSONArray("choices")
-            ?.optJSONObject(0)
+        val firstChoice = json.optJSONArray("choices")?.optJSONObject(0)
+        val content = firstChoice
             ?.optJSONObject("message")
             ?.optString("content")
             ?.trim()
 
         if (content.isNullOrEmpty()) throw Exception("The provider returned an empty reply. Please try again.")
-        return content
+
+        // Local servers (notably Ollama) stop with finish_reason "length" at the context-window edge
+        // and give NO error — keep the partial text and append the actionable notice so it isn't silent.
+        val truncated = firstChoice?.optString("finish_reason")?.lowercase() == "length"
+        return if (truncated) content + TRUNCATION_NOTE else content
     }
 
     /** Base for the Custom provider — the user's URL with any trailing slashes trimmed. */
@@ -488,6 +497,42 @@ class AiCoach(private val repo: WhoopRepository) {
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * Max chat turns sent on a single request, beyond the context-bearing first user turn. Caps
+         * how much history we ship so a long conversation can't crowd out the reply on a small local
+         * context window (e.g. Ollama's 2048-token default). High enough that normal chats go in full.
+         */
+        const val MAX_HISTORY_TURNS = 10
+
+        /**
+         * Appended to a reply when the server stopped early because it ran out of context window.
+         * Local OpenAI-compatible servers (notably Ollama, which defaults to a 2048-token window and
+         * IGNORES `num_ctx` on the `/v1` endpoint) truncate silently — no error, the text just stops
+         * mid-sentence. We can't raise the window over the OpenAI wire format, so we make the cutoff
+         * visible and tell the user exactly how to fix it.
+         */
+        const val TRUNCATION_NOTE =
+            "\n\n---\n*Reply cut off: the model hit its context-window limit. " +
+                "On a local server like Ollama (default 2048 tokens), raise it — create a Modelfile " +
+                "with `PARAMETER num_ctx 8192` and select that model, or set " +
+                "`OLLAMA_CONTEXT_LENGTH=8192` and relaunch Ollama — then ask again.*"
+
+        /**
+         * Pure: sliding-window the chat. Returns everything when short; otherwise the first user turn
+         * (so the data context still has a turn to ride) followed by the last [maxRecent] messages,
+         * with no duplication. No state — unit-tested.
+         */
+        fun trimmedHistory(msgs: List<ChatMsg>, maxRecent: Int): List<ChatMsg> {
+            if (msgs.size <= maxRecent + 1) return msgs
+            val tailStart = msgs.size - maxRecent
+            val tail = msgs.subList(tailStart, msgs.size)
+            val firstUserIdx = msgs.indexOfFirst { it.role == "user" }
+            // No user turn (shouldn't happen for a real chat), or the first user turn is already
+            // inside the retained tail → just return the tail, no duplication.
+            if (firstUserIdx < 0 || firstUserIdx >= tailStart) return tail.toList()
+            return listOf(msgs[firstUserIdx]) + tail
+        }
 
         /**
          * The coach persona. Anonymous (names no app author or model vendor) and includes the

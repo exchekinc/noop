@@ -175,6 +175,8 @@ struct TrendsView: View {
                 let rhr = resolve { $0.restingHr.map(Double.init) }
                 let strain = resolve { $0.strain }
                 VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+                    // Week-in-review digest (#208) — self-hides when this week has no data.
+                    WeeklyDigestCard()
                     rangeBar(recovery: recovery)
                     heroRecovery(recovery: recovery)
                     smallMultiples(hrv: hrv, rhr: rhr, strain: strain)

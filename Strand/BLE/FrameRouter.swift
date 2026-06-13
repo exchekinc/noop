@@ -38,8 +38,9 @@ public final class FrameRouter {
             }
             // The realtime stream usually reports rr_count=0; only update R-R when this frame
             // actually carries intervals, so we don't wipe R-R sourced from the 0x2A37 profile.
+            // setRRIntervals also feeds the Live console's rolling rrRecent buffer.
             if let rr = parsed.parsed["rr_intervals"]?.intArrayValue, !rr.isEmpty {
-                state.rr = rr
+                state.setRRIntervals(rr)
             }
 
         case "COMMAND_RESPONSE":

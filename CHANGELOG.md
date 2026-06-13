@@ -17,6 +17,24 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 2.8.0 — New: Week in review, a live body console, fresher charts & more
+
+A wave of new features and community contributions, reimplemented under the project identity.
+
+- **New — Week in review (#208):** a deterministic, offline weekly digest (Charge / Effort / Rest,
+  HRV, resting HR) with week-over-week + vs-baseline changes and a plain-English read, at the top of
+  **Trends**. Thanks @subscriptiondestroyer.
+- **New — live body console (Live screen):** a clearer readout of HR, recent R-R, rolling RMSSD and the
+  live connection/signal state. Thanks @khalilkm01.
+- **New — live HR time axis (#198):** the live heart-rate chart now shows the time window. Thanks @sebastianwoo.
+- **Improved — freshest-source resolver:** charts/metrics resolve the freshest value per metric
+  (imported WHOOP → NOOP-computed → compatible Apple Health). Thanks @khalilkm01.
+- **New — personal experiments (Insights):** an n-of-1 section correlating a logged behaviour against
+  recovery, gated to behaviours you have data for. Thanks @khalilkm01.
+- **Improved — AI Coach:** surfaces context-window truncation and caps history sent to local servers.
+  Thanks @witchykinkajou.
+- **Improved (Android):** Today + Trends charts gain time/value axis labels. Thanks @ujix.
+
 ## 2.7.0 — Big fix wave: clock, reconnect, local LLM, Explore, weight and more
 
 A large batch of fixes from reported issues and community contributions.

@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "2.7.0"
+    static let currentVersion = "2.8.0"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,19 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "2.8.0",
+            title: "New: Week in review, a live body console, fresher charts and more",
+            date: "June 2026",
+            items: [
+                "New: a **Week in review** — a deterministic, offline weekly digest of your Charge / Effort / Rest, HRV and resting HR, with week-over-week and vs-baseline changes and a plain-English read. It appears at the top of Trends once the week has a day or two of data. Thanks @subscriptiondestroyer (#208).",
+                "New (Live screen): a live **body console** — a clearer at-a-glance readout of heart rate, recent R-R, a rolling RMSSD and the live connection/signal state. Thanks @khalilkm01.",
+                "New: the Live heart-rate chart now has a **time axis** so you can read what window it covers and watch it scroll. Thanks @sebastianwoo (#198).",
+                "Improved: charts and metrics now resolve the **freshest source** for each value (imported WHOOP, then NOOP-computed, then compatible Apple Health), so a screen never looks stale when newer data exists. Thanks @khalilkm01.",
+                "New (Insights): a **personal experiments** (n-of-1) section that correlates a behaviour you log against your recovery — only for behaviours you actually have data for. Thanks @khalilkm01.",
+                "Improved (AI Coach): when a local LLM truncates the conversation to fit its context window, NOOP now tells you, and caps the history it sends to local servers. Thanks @witchykinkajou.",
+                "Improved (Android): the Today and Trends charts now have proper time and value axis labels. Thanks @ujix.",
+            ]),
         Release(
             version: "2.7.0",
             title: "Big fix wave — clock, reconnect, local LLM, Explore, weight and more",

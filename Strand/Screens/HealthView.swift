@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import StrandDesign
 import StrandAnalytics
 import WhoopStore
@@ -65,8 +66,10 @@ private struct HeartRateSection: View {
     /// Rolling buffer of recently-streamed live HR (newest last), so the hero graph builds a real
     /// continuous time-series instead of collapsing to a 2-point flat line when the strap streams HR
     /// but little/no R-R (the #105 case — Live HR works, but the Health graph showed only 2 samples).
+    /// Each sample now carries the wall-clock time it arrived so the hero renders a real time x-axis
+    /// (#198 — the chart had no time axis, so an iPhone user with no hover had no time context).
     /// Capped to ~3 min @ ~1 Hz; resets when the view is recreated, which is fine for a live trace.
-    @State private var hrHistory: [Double] = []
+    @State private var hrHistory: [LiveHRSample] = []
 
     /// HR to display: reported value when >0, else derived from the latest R-R
     /// interval (the strap streams R-R even when its HR field reads 0).
@@ -94,19 +97,30 @@ private struct HeartRateSection: View {
         }
     }
 
-    /// A short HR series for the hero sparkline, derived from streamed R-R intervals
-    /// (newest last). Falls back to a flat line at the current HR when R-R is sparse.
-    private func hrSeries(_ hr: Int?) -> [Double] {
-        // Prefer the accumulated live HR time-series — that's what a "live" graph should show, and it
-        // keeps growing even when the strap streams HR but sparse R-R (#105). Fall back to R-R-derived
-        // beats, then a flat line at the current HR.
+    /// A short, time-stamped HR series for the hero chart (newest last).
+    /// Prefers the accumulated live-HR time-series — that's what a "live" graph should show, and it
+    /// keeps growing even when the strap streams HR but sparse R-R (#105). Falls back to R-R-derived
+    /// beats, then a flat line at the current HR. The R-R / flat fallbacks have no real per-sample
+    /// timestamps, so we synthesise a 1 Hz trailing window ending "now" — the x-axis still reads as
+    /// clock time and scrolls, matching the live buffer's behaviour (#198).
+    private func hrSeries(_ hr: Int?) -> [LiveHRSample] {
         if hrHistory.count > 1 { return hrHistory }
         let beats = live.rr.suffix(60).compactMap { rr -> Double? in
             rr > 0 ? 60_000.0 / Double(rr) : nil
         }
-        if beats.count > 1 { return Array(beats) }
-        if let hr = hr { return [Double(hr), Double(hr)] }
+        if beats.count > 1 { return Self.synthesiseSeries(beats) }
+        if let hr = hr { return Self.synthesiseSeries([Double(hr), Double(hr)]) }
         return []
+    }
+
+    /// Wrap a bare value series in trailing 1 Hz timestamps ending at `Date()`, so the
+    /// fallbacks (R-R-derived beats, flat line) chart on the same time x-axis as the live buffer.
+    private static func synthesiseSeries(_ values: [Double]) -> [LiveHRSample] {
+        let now = Date()
+        let n = values.count
+        return values.enumerated().map { i, v in
+            LiveHRSample(date: now.addingTimeInterval(Double(i - (n - 1))), bpm: v)
+        }
     }
 
     var body: some View {
@@ -139,30 +153,30 @@ private struct HeartRateSection: View {
             }
         }
         .onChange(of: displayHR) { newHR in
-            // Append each new live HR reading so the hero graph grows a continuous time-series (#105).
+            // Append each new live HR reading (with its arrival time) so the hero graph grows a
+            // continuous, time-stamped series — feeding the time x-axis (#198) and the #105 trace.
             guard let v = newHR else { return }
-            hrHistory.append(Double(v))
+            hrHistory.append(LiveHRSample(date: Date(), bpm: Double(v)))
             if hrHistory.count > 180 { hrHistory.removeFirst(hrHistory.count - 180) }
         }
     }
 
-    /// The hero chart body: a tall HR sparkline tinted to the current zone, with a
+    /// The hero chart body: a tall, time-aware HR line tinted to the current zone, with a
     /// status pill floated top-trailing. Fixed to NoopMetrics.chartHeight via ChartCard.
     private func heroChart(displayHR: Int?, hasLiveHR: Bool,
-                           fraction: Double, zone: Int, series: [Double]) -> some View {
+                           fraction: Double, zone: Int, series: [LiveHRSample]) -> some View {
         ZStack(alignment: .topTrailing) {
             if series.count > 1 {
-                Sparkline(
-                    values: series,
+                LiveTimeChart(
+                    samples: series,
                     gradient: Gradient(colors: [
                         StrandPalette.hrZoneColor(max(1, zone - 1)),
                         StrandPalette.hrZoneColor(zone),
-                    ]),
-                    lineWidth: 2.5,
-                    showsArea: true,
-                    valueFormat: { "\(Int($0.rounded())) bpm" }
+                    ])
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Live heart rate over time")
+                .accessibilityValue(hasLiveHR ? "\(displayHR ?? 0) beats per minute, zone \(zone)" : "no data")
             } else {
                 VStack(spacing: 8) {
                     Text(displayHR.map(String.init) ?? "—")
@@ -185,6 +199,90 @@ private struct HeartRateSection: View {
     private func zoneLabel(hasLiveHR: Bool, zone: Int, fraction: Double) -> String {
         guard hasLiveHR else { return "Idle" }
         return "Zone \(zone) · \(Int((fraction * 100).rounded()))%"
+    }
+}
+
+// MARK: - Live HR sample + time chart
+
+/// One streamed live-HR reading with the wall-clock time it arrived. Carrying the time
+/// (rather than a bare bpm) is what lets the hero render a real time x-axis (#198).
+struct LiveHRSample: Identifiable, Equatable {
+    let id = UUID()
+    let date: Date
+    let bpm: Double
+}
+
+/// The live HR hero chart: a zone-gradient line + soft area over a real **time** x-axis
+/// (hour:minute:second), so the trace visibly scrolls as new samples arrive. Replaces the
+/// axis-less Sparkline on this hero (#198) — an iPhone user has no hover, so the visible
+/// clock axis is the fix. Built on Swift Charts; the rolling ~90–180 s window comes from the
+/// caller's capped buffer (HeartRateSection.hrHistory).
+private struct LiveTimeChart: View {
+    var samples: [LiveHRSample]
+    /// The gradient the line/area is stroked with (the current HR-zone band).
+    var gradient: Gradient
+
+    /// Auto-fitted y bounds with a little headroom so the trace never kisses the edges.
+    private var yDomain: ClosedRange<Double> {
+        let values = samples.map(\.bpm)
+        guard let lo = values.min(), let hi = values.max() else { return 0...1 }
+        if lo == hi { return (lo - 5)...(hi + 5) }
+        let pad = (hi - lo) * 0.12
+        return (lo - pad)...(hi + pad)
+    }
+
+    /// A vertical gradient keyed bottom→top so the stroke colour tracks the zone band.
+    private var lineGradient: LinearGradient {
+        LinearGradient(gradient: gradient, startPoint: .bottom, endPoint: .top)
+    }
+
+    /// The lightest stop of the zone gradient, used to tint the area wash.
+    private var areaTint: Color {
+        StrandPalette.sample(stops: gradient.stops, at: 0.85)
+    }
+
+    var body: some View {
+        Chart(samples) { s in
+            AreaMark(
+                x: .value("Time", s.date),
+                y: .value("BPM", s.bpm)
+            )
+            .interpolationMethod(.catmullRom)
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [areaTint.opacity(0.24), Color.clear],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+
+            LineMark(
+                x: .value("Time", s.date),
+                y: .value("BPM", s.bpm)
+            )
+            .interpolationMethod(.catmullRom)
+            .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+            .foregroundStyle(lineGradient)
+        }
+        .chartYScale(domain: yDomain)
+        // catmullRom overshoots on sharp HR turns and the area fill draws unclipped — clip the
+        // plot so nothing bleeds below the card (mirrors TrendChart's fix for #104).
+        .chartPlotStyle { plotArea in plotArea.clipped() }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
+                AxisValueLabel(format: .dateTime.hour().minute().second())
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .font(StrandFont.footnote)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
+                AxisValueLabel().foregroundStyle(StrandPalette.textTertiary)
+                    .font(StrandFont.footnote)
+            }
+        }
+        .clipped()
     }
 }
 

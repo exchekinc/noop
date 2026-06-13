@@ -470,34 +470,20 @@ fun CompareScreen(vm: AppViewModel) {
 
 /**
  * Load the full history for [metric] (ascending by day). Mirrors macOS
- * repo.series(key, source) over the generic metricSeries store; for core my-whoop
- * metrics with a matching DailyMetric column, falls back to the daily cache when the
- * generic store is empty so the screen shows real on-device data.
+ * repo.resolvedSeries(key, source) (PR#196): resolves across compatible sources freshest-wins —
+ * imported WHOOP > NOOP-computed > declared-compatible Apple Health — and gap-fills from the
+ * DailyMetric columns for the days the long-format metricSeries doesn't carry, so the screen shows
+ * real on-device data even when only the daily cache (not the generic importer) has populated.
  */
 private suspend fun loadFullSeries(
     vm: AppViewModel,
     metric: CompareMetric,
-    cachedDays: List<DailyMetric>,
+    @Suppress("UNUSED_PARAMETER") cachedDays: List<DailyMetric>,
 ): List<Pair<String, Double>> {
     // Wide window covering all of history (the macOS days = 4000 default).
     val to = todayDay(1)
     val from = todayDay(-4000)
-    val generic = vm.repo.metricSeries(metric.source, metric.key, from, to)
-        .map { it.day to it.value }
-        .sortedBy { it.first }
-    if (generic.isNotEmpty()) return generic
-
-    // Fallback: derive from the daily metric cache for my-whoop columns.
-    if (metric.source == "my-whoop") {
-        val pick = CompareCatalog.dailyPick(metric.key)
-        if (pick != null) {
-            // Merged: imported WHOOP days win; on-device computed days gap-fill the series.
-            val all = vm.repo.daysMerged("my-whoop")
-            val derived = if (all.isNotEmpty()) all else cachedDays
-            return derived.mapNotNull { d -> pick(d)?.let { d.day to it } }.sortedBy { it.first }
-        }
-    }
-    return emptyList()
+    return vm.repo.resolvedSeries(metric.key, metric.source, from, to).values
 }
 
 /** "yyyy-MM-dd" for today offset by [deltaDays], fixed UTC. */

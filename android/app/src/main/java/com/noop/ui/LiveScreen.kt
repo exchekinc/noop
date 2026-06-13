@@ -1,6 +1,7 @@
 package com.noop.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,14 +11,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -35,10 +40,15 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
@@ -50,6 +60,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import com.noop.analytics.Sport
 import com.noop.analytics.WorkoutSport
+import com.noop.ble.LiveState
 import com.noop.ble.WhoopModel
 
 /**
@@ -85,22 +96,14 @@ fun LiveScreen(viewModel: AppViewModel) {
         if (live.bonded) viewModel.getBattery()
     }
 
-    ScreenScaffold(title = "Live", subtitle = "All your data · none of the cloud") {
+    val activeConnection = live.connected && live.bonded
 
-        // Connection pill row.
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            // encryptedBond → green "Bonded"; the 5/MG live-HR shortcut (bonded but no genuine encrypted
-            // bond) → amber "Live HR (not fully paired)" so users know the encrypted channel isn't up (#69).
-            val (label, tone) = when {
-                live.encryptedBond && live.backfilling -> "Bonded · syncing" to StrandTone.Accent
-                live.encryptedBond -> "Bonded" to StrandTone.Positive
-                live.bonded -> "Live HR (not fully paired)" to StrandTone.Warning
-                live.connected -> "Connected" to StrandTone.Warning
-                live.scanning -> "Searching…" to StrandTone.Warning
-                else -> "Disconnected" to StrandTone.Critical
-            }
-            StatePill(label, tone = tone, pulsing = live.bonded || live.scanning)
-        }
+    ScreenScaffold(title = "Live Body Console", subtitle = "Current physiology, strap trust, and session controls") {
+
+        // Console header — the pill + a connection-mode badge (+ a live SYNCING badge during a history
+        // offload), with battery / worn / last-sync stats. Mirrors the macOS consoleHeader.
+        ConsoleHeader(live = live, activeConnection = activeConnection)
+
         // Why it's in this state and what to try (permission, strap busy, not found…).
         live.statusNote?.let { note ->
             Text(
@@ -177,36 +180,20 @@ fun LiveScreen(viewModel: AppViewModel) {
             }
         }
 
-        // Big HR card.
-        HeartRateCard(bpm = bpm, rr = live.rr)
+        // Body console — focal pulsing HR ring + live physiology (R-R strip, rolling RMSSD, frame/event).
+        BodyConsole(live = live, bpm = bpm, activeConnection = activeConnection)
 
-        // Status grid.
-        Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-            StatTile(
-                modifier = Modifier.weight(1f),
-                label = "Battery",
-                value = live.batteryPct?.let { "${it.toInt()}%" } ?: "—",
-                accent = batteryColor(live.batteryPct),
-            )
-            StatTile(
-                modifier = Modifier.weight(1f),
-                label = "Worn",
-                value = if (live.worn) "Yes" else "Off",
-                accent = if (live.worn) Palette.accent else Palette.textTertiary,
-            )
-            StatTile(
-                modifier = Modifier.weight(1f),
-                label = "Last Event",
-                value = live.lastEvent ?: "—",
-                accent = Palette.textPrimary,
-            )
-        }
+        // Signal Trust rail — one tile per signal that has to be current for the console to be trusted.
+        SignalTrustRail(live = live, bpm = bpm, activeConnection = activeConnection)
 
         // GPS workout sport picker — the shared sheet (also used on the Workouts screen, #115).
         var showSportPicker by remember { mutableStateOf(false) }
         if (showSportPicker) {
             StartWorkoutSheet(vm = viewModel, onDismiss = { showSportPicker = false })
         }
+
+        // Session console — record or inspect the current stream.
+        SectionHeader(title = "Session", overline = "Record or inspect the current stream")
 
         // Manual workout — start/stop a session yourself; records HR + strain until you end it.
         val w = activeWorkout
@@ -249,15 +236,40 @@ fun LiveScreen(viewModel: AppViewModel) {
                 }
             }
         } else {
-            if (live.bonded) {
+            // Start-workout + a Refresh-battery action, gated on a live link (parity with the macOS
+            // sessionActions). The Refresh button re-reads strap battery / connection on demand.
+            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = { showSportPicker = true },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.weight(1f),
+                    enabled = activeConnection,
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Palette.accent, contentColor = Palette.surfaceBase,
                     ),
-                ) { Text("Start workout", style = NoopType.captionNumber) }
+                ) {
+                    Text(
+                        "Start workout", style = NoopType.captionNumber,
+                        maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { viewModel.getBattery() },
+                    modifier = Modifier.weight(1f),
+                    enabled = activeConnection,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Palette.accent),
+                ) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp).padding(end = 4.dp),
+                    )
+                    Text(
+                        "Refresh", style = NoopType.captionNumber,
+                        maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                    )
+                }
             }
             lastWorkout?.let { row ->
                 val mins = ((row.durationS ?: 0.0) / 60).toInt()
@@ -437,47 +449,356 @@ fun LiveScreen(viewModel: AppViewModel) {
     }
 }
 
+// MARK: - Console header
+
 @Composable
-private fun HeartRateCard(bpm: Int?, rr: List<Int>) {
-    val color by animateColorAsState(
-        if (bpm == null) Palette.textSecondary else Palette.accentHover,
-        tween(Motion.durationStandard), label = "hrColor",
-    )
-    val shape = RoundedCornerShape(Metrics.cardRadius)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Palette.surfaceRaised, shape)
-            .border(1.dp, Palette.hairline, shape)
-            .padding(vertical = 28.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Overline("Heart Rate")
-            Text(
-                text = bpm?.toString() ?: "—",
-                style = NoopType.number(96f),
-                color = color,
-            )
-            Text("bpm", style = NoopType.subhead, color = Palette.textSecondary)
-            if (rr.isNotEmpty()) {
-                Spacer(Modifier.padding(top = 4.dp))
-                Text(
-                    text = "R-R " + rr.takeLast(4).joinToString(" · ") + " ms",
-                    style = NoopType.captionNumber,
-                    color = Palette.textTertiary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+private fun ConsoleHeader(live: LiveState, activeConnection: Boolean) {
+    NoopCard(padding = 14.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Badges row — pill + connection-mode badge + a live SYNCING badge during an offload.
+            val (label, tone) = when {
+                live.encryptedBond && live.backfilling -> "Bonded · syncing" to StrandTone.Accent
+                live.encryptedBond -> "Bonded" to StrandTone.Positive
+                live.bonded -> "Live HR (not fully paired)" to StrandTone.Warning
+                live.connected -> "Connected" to StrandTone.Warning
+                live.scanning -> "Searching…" to StrandTone.Warning
+                else -> "Disconnected" to StrandTone.Critical
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                StatePill(label, tone = tone, pulsing = live.bonded || live.scanning)
+                SourceBadge(connectionModeBadge(live, activeConnection), tint = connectionModeColor(live, activeConnection))
+                if (live.backfilling) {
+                    SourceBadge("SYNCING ${live.syncChunksThisSession}", tint = Palette.metricCyan)
+                }
+            }
+            // Stats row — battery / worn / last-sync. Worn is only trustworthy on a live link.
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                HeaderStat("Battery", live.batteryPct?.let { "${it.toInt()}%" } ?: "—")
+                HeaderStat("Worn", if (activeConnection) (if (live.worn) "Yes" else "No") else "—")
+                HeaderStat("Last sync", lastSyncLabel(live))
             }
         }
     }
 }
 
-private fun batteryColor(pct: Double?): Color = when {
-    pct == null -> Palette.textPrimary
-    pct < 15 -> Palette.statusCritical
-    pct < 30 -> Palette.statusWarning
+@Composable
+private fun HeaderStat(title: String, value: String) {
+    Column(horizontalAlignment = Alignment.Start) {
+        Text(title.uppercase(), style = NoopType.footnote, color = Palette.textTertiary)
+        Text(
+            value, style = NoopType.captionNumber, color = Palette.textSecondary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun connectionModeBadge(live: LiveState, activeConnection: Boolean): String = when {
+    activeConnection && live.encryptedBond -> "FULL BOND"
+    activeConnection -> "LIVE HR ONLY"
+    live.connected -> "CONNECTING"
+    live.encryptedBond -> "PAIRED"
+    else -> "OFFLINE"
+}
+
+private fun connectionModeColor(live: LiveState, activeConnection: Boolean): Color = when {
+    activeConnection && live.encryptedBond -> Palette.accent
+    activeConnection || live.connected -> Palette.statusWarning
+    else -> Palette.metricRose
+}
+
+private fun lastSyncLabel(live: LiveState): String =
+    live.lastSyncAt?.let { relativeAgo(it) } ?: "Never"
+
+// MARK: - Body console (focal HR ring + live physiology)
+
+@Composable
+private fun BodyConsole(live: LiveState, bpm: Int?, activeConnection: Boolean) {
+    NoopCard(padding = 20.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            HeartReadout(live = live, bpm = bpm, activeConnection = activeConnection)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Palette.hairline),
+            )
+            PhysiologyStack(live = live, activeConnection = activeConnection)
+        }
+    }
+}
+
+@Composable
+private fun HeartReadout(live: LiveState, bpm: Int?, activeConnection: Boolean) {
+    val color by animateColorAsState(
+        if (bpm == null) Palette.textSecondary else Palette.accentHover,
+        tween(Motion.durationStandard), label = "hrColor",
+    )
+    // Pulse the ring on each new HR sample. animateFloatAsState toward a target that flips with the
+    // value gives a single ease-out "beat" without an infinite loop.
+    val pulseTarget = if (bpm == null) 0f else ((bpm % 2)).toFloat()
+    val pulse by animateFloatAsState(pulseTarget, tween(300), label = "hrPulse")
+    val ringScale = 0.96f + 0.11f * pulse
+    val ringColor = if (bpm == null) Palette.hairline else Palette.accent
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Overline("Heart Rate")
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .aspectRatio(1f),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .scale(ringScale)
+                    .clip(CircleShape)
+                    .border(2.dp, ringColor.copy(alpha = 0.18f), CircleShape),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.86f)
+                    .aspectRatio(1f)
+                    .clip(CircleShape)
+                    .border(1.dp, Palette.hairline, CircleShape),
+            )
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(text = bpm?.toString() ?: "—", style = NoopType.number(72f), color = color)
+                Text("bpm", style = NoopType.subhead, color = Palette.textSecondary)
+            }
+        }
+        Text(
+            signalTrustSummary(live, activeConnection),
+            style = NoopType.footnote,
+            color = Palette.textTertiary,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun PhysiologyStack(live: LiveState, activeConnection: Boolean) {
+    val rmssd = rollingRMSSD(live.rrRecent)
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Overline("Live Physiology")
+                Text(connectionModeDetail(live, activeConnection), style = NoopType.headline, color = Palette.textPrimary)
+            }
+            if (rmssd != null) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("RMSSD", style = NoopType.footnote, color = Palette.textTertiary)
+                    Text("${rmssd.roundToInt()} ms", style = NoopType.number(24f), color = Palette.metricCyan)
+                }
+            }
+        }
+        RRStrip(rrRecent = live.rrRecent)
+        Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap), modifier = Modifier.fillMaxWidth()) {
+            LiveProofMetric(Modifier.weight(1f), "R-R", live.rr.lastOrNull()?.let { "$it ms" } ?: "—", Palette.metricCyan)
+            LiveProofMetric(Modifier.weight(1f), "Event", live.lastEvent ?: "—", Palette.statusWarning)
+        }
+    }
+}
+
+/** A compact bar strip of the recent R-R buffer — proof the console is genuinely live (a single HR
+ *  number can look frozen; a moving R-R strip can't). Empty state shows muted ticks. */
+@Composable
+private fun RRStrip(rrRecent: List<Int>) {
+    val values = rrRecent.takeLast(18)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.height(58.dp),
+        ) {
+            if (values.isEmpty()) {
+                repeat(18) {
+                    Box(
+                        modifier = Modifier
+                            .width(6.dp)
+                            .height(18.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Palette.hairline),
+                    )
+                }
+            } else {
+                values.forEach { rr ->
+                    Box(
+                        modifier = Modifier
+                            .width(6.dp)
+                            .height(rrBarHeight(rr).dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Palette.metricCyan.copy(alpha = (0.35f + minOf(0.45, (rr % 180) / 400.0)).toFloat())),
+                    )
+                }
+            }
+        }
+        Text(
+            if (values.isEmpty()) "Waiting for R-R intervals."
+            else "Recent intervals: " + values.takeLast(5).joinToString(" · ") + " ms",
+            style = NoopType.footnote,
+            color = Palette.textTertiary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun LiveProofMetric(modifier: Modifier, label: String, value: String, tint: Color) {
+    val shape = RoundedCornerShape(10.dp)
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(Palette.surfaceInset)
+            .border(1.dp, Palette.hairline, shape)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(label.uppercase(), style = NoopType.footnote, color = Palette.textTertiary)
+        Text(value, style = NoopType.captionNumber, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+// MARK: - Signal Trust rail
+
+@Composable
+private fun SignalTrustRail(live: LiveState, bpm: Int?, activeConnection: Boolean) {
+    val tiles = signalTiles(live, bpm, activeConnection)
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        SectionHeader(title = "Signal Trust", overline = "Proof that the console is current")
+        // Two tiles per row (a LazyVerticalGrid can't live inside the scrolling ScreenScaffold —
+        // infinite-height constraints — so use fixed Rows, the correct Compose idiom here).
+        tiles.chunked(2).forEach { rowTiles ->
+            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.gap), modifier = Modifier.fillMaxWidth()) {
+                rowTiles.forEach { tile ->
+                    SignalTrustTile(tile, modifier = Modifier.weight(1f))
+                }
+                // Pad an odd final row so the lone tile keeps half-width (matches the grid above).
+                if (rowTiles.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+private data class SignalTile(
+    val title: String,
+    val value: String,
+    val detail: String,
+    val tint: Color,
+)
+
+private fun signalTiles(live: LiveState, bpm: Int?, activeConnection: Boolean): List<SignalTile> = listOf(
+    SignalTile(
+        "Heart rate",
+        bpm?.let { "$it bpm" } ?: "Missing",
+        if (activeConnection) "Streaming now" else "No active stream",
+        if (bpm == null) Palette.textTertiary else Palette.accent,
+    ),
+    SignalTile(
+        "R-R intervals",
+        if (live.rrRecent.isEmpty()) "Missing" else "${live.rrRecent.size} recent",
+        rollingRMSSD(live.rrRecent)?.let { "RMSSD ${it.roundToInt()} ms" } ?: "Needs interval frames",
+        if (live.rrRecent.isEmpty()) Palette.textTertiary else Palette.metricCyan,
+    ),
+    SignalTile(
+        "Connection",
+        when {
+            activeConnection && live.encryptedBond -> "Encrypted"
+            activeConnection -> "Partial"
+            live.connected -> "Connected"
+            else -> "Offline"
+        },
+        if (activeConnection && live.encryptedBond) "Controls unlocked" else "Standard HR is not a full bond",
+        connectionModeColor(live, activeConnection),
+    ),
+    SignalTile(
+        "History sync",
+        if (live.backfilling) "${live.syncChunksThisSession} chunks" else lastSyncLabel(live),
+        when {
+            live.lastSyncError != null -> live.lastSyncError
+            live.backfilling -> "Offload in progress"
+            live.lastSyncAt == null -> "No completed offload yet"
+            else -> "Last offload completed"
+        },
+        if (live.backfilling) Palette.metricCyan else Palette.textSecondary,
+    ),
+    SignalTile(
+        "Battery",
+        live.batteryPct?.let { "${it.toInt()}%" } ?: "Unknown",
+        if (live.charging == true) "Charging" else "Last reported by strap",
+        batteryTint(live.batteryPct),
+    ),
+    // Wear is only trustworthy on a live link: `worn` defaults true and is only updated by
+    // WRIST_ON/OFF events, so while OFFLINE it would read a false-green "On wrist". Gate value + tint
+    // on activeConnection (triage fix for PR#191, parity with the macOS Wear tile).
+    SignalTile(
+        "Wear state",
+        if (activeConnection) (if (live.worn) "On wrist" else "Off wrist") else "Unknown",
+        if (activeConnection) (if (live.worn) "Eligible for live physiology" else "Wear the strap for scoring") else "Connect to read wear state",
+        when {
+            !activeConnection -> Palette.textTertiary
+            live.worn -> Palette.accent
+            else -> Palette.statusWarning
+        },
+    ),
+)
+
+@Composable
+private fun SignalTrustTile(tile: SignalTile, modifier: Modifier = Modifier) {
+    NoopCard(modifier = modifier.heightIn(min = 112.dp), padding = 14.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Overline(tile.title)
+            Text(tile.value, style = NoopType.headline, color = tile.tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(tile.detail, style = NoopType.footnote, color = Palette.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+// MARK: - Pure helpers (shared by the body console + the trust rail)
+
+private fun signalTrustSummary(live: LiveState, activeConnection: Boolean): String = when {
+    activeConnection && live.encryptedBond -> "Encrypted stream — deep controls and history sync available."
+    activeConnection -> "Live heart rate is flowing; full strap controls need an encrypted bond."
+    live.connected -> "Connected, waiting for a streaming state."
+    else -> "Scan and connect to start a live stream."
+}
+
+private fun connectionModeDetail(live: LiveState, activeConnection: Boolean): String = when {
+    activeConnection && live.encryptedBond -> "Full strap stream is active."
+    activeConnection -> "Heart rate stream is active."
+    live.connected -> "Radio connected, stream not yet trusted."
+    else -> "No live stream."
+}
+
+private fun rrBarHeight(rr: Int): Double {
+    val clamped = rr.coerceIn(420, 1180)
+    return 16.0 + (clamped - 420) / 760.0 * 42.0
+}
+
+/** A "feel" RMSSD over the recent R-R buffer — time-gap-unaware on purpose (a live indicator, not a
+ *  clinical figure; blanked on disconnect by clearedBiometrics). null until ≥3 intervals land. */
+private fun rollingRMSSD(rrRecent: List<Int>): Double? {
+    val values = rrRecent.takeLast(12)
+    if (values.size < 3) return null
+    val diffs = values.zipWithNext { a, b -> (b - a).toDouble() }
+    val meanSquare = diffs.sumOf { it * it } / diffs.size
+    return sqrt(meanSquare)
+}
+
+private fun batteryTint(pct: Double?): Color = when {
+    pct == null -> Palette.textTertiary
+    pct <= 15 -> Palette.metricRose
+    pct <= 30 -> Palette.statusWarning
     else -> Palette.accent
 }
 
