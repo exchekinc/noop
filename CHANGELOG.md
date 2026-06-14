@@ -17,6 +17,13 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 2.15.2 — Today header date fix (west of UTC)
+
+- **Fixed:** the Today header date could read one day behind the day-nav pill (e.g. "Saturday, 13 June"
+  under a "14 Jun" pill) for anyone in a timezone west of UTC — it now matches. Thanks @vulnix0x4 (#320).
+
+---
+
 ## 2.15.1 — Last Workouts tile fix
 
 - **Fixed (Android):** the **Last Workouts** tiles on Today no longer truncate the workout

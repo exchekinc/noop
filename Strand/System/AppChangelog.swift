@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "2.15.1"
+    static let currentVersion = "2.15.2"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "2.15.2",
+            title: "Today header date fix (west-of-UTC)",
+            date: "June 2026",
+            items: [
+                "Fixed: the Today header date could read one day behind the day-nav pill (e.g. \"Saturday, 13 June\" under a \"14 Jun\" pill) for anyone in a timezone west of UTC — it now matches the pill. Thanks @vulnix0x4 (#320).",
+            ]),
         Release(
             version: "2.15.1",
             title: "Last Workouts tile fix",

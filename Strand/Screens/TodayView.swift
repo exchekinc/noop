@@ -1190,12 +1190,19 @@ struct TodayView: View {
         return f.string(from: NSNumber(value: v)) ?? "\(Int(v.rounded()))"
     }
 
-    // MARK: - Date parsing (yyyy-MM-dd, en_US_POSIX, UTC)
+    // MARK: - Date parsing (yyyy-MM-dd, en_US_POSIX, LOCAL zone)
+    //
+    // Parses a `DailyMetric.day` key, which is written in the device's LOCAL zone
+    // (Repository.dayKeyFormatter sets no zone — the post-#277 local-day bucketing).
+    // It MUST parse in that same local zone: parsing a local-day key like "2026-06-14"
+    // as UTC yields 00:00Z, which is still June 13 in any negative-UTC zone, so the
+    // header subtitle then printed the previous day for everyone west of UTC (#319/#320).
+    // Matching dayKeyFormatter (no explicit zone) makes the parse→format round-trip an identity.
 
     static let dayParser: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = TimeZone.current
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
