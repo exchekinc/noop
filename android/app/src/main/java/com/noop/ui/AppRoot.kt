@@ -1,5 +1,10 @@
 package com.noop.ui
 
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -73,10 +78,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.noop.BuildConfig
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -207,17 +217,27 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 12.dp, vertical = 16.dp),
                 ) {
-                    Overline(
-                        "Strand",
-                        modifier = Modifier.padding(start = 16.dp, bottom = 4.dp),
-                        color = Palette.accent,
-                    )
-                    Text(
-                        "Instrument",
-                        style = NoopType.footnote,
-                        color = Palette.textTertiary,
-                        modifier = Modifier.padding(start = 16.dp, bottom = 12.dp),
-                    )
+                    // Drawer header: brand glyph beside the "Strand · Instrument" lockup so the
+                    // logo reads at the top of the navigation, matching the in-app top bar.
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 12.dp),
+                    ) {
+                        BrandMark(size = 22.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Overline(
+                                "Strand",
+                                modifier = Modifier.padding(bottom = 4.dp),
+                                color = Palette.accent,
+                            )
+                            Text(
+                                "Instrument",
+                                style = NoopType.footnote,
+                                color = Palette.textTertiary,
+                            )
+                        }
+                    }
 
                     drawerGroups.forEachIndexed { index, group ->
                         if (index > 0) {
@@ -266,6 +286,10 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Brand glyph reads in-app on every screen — the open recovery ring
+                            // ("O" of NOOP) sits just before the screen title.
+                            BrandMark(size = 22.dp)
+                            Spacer(Modifier.width(10.dp))
                             Text(current.title, style = NoopType.title2, color = Palette.textPrimary)
                             if (BuildConfig.ENABLE_DEMO) {
                                 Spacer(Modifier.width(10.dp))
@@ -357,6 +381,15 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                 navController = nav,
                 startDestination = Destination.Today.route,
                 modifier = Modifier.padding(inner),
+                // README motion: top-level destinations crossfade (~240ms) on the calm,
+                // decelerating global easing — nothing slides or bounces between tabs. The
+                // same fade is used for back (pop) so the bar never feels jerky. Drill-ins
+                // (e.g. vital_detail) are pushed by the same NavHost, so they inherit the
+                // same restrained crossfade rather than a hard cut.
+                enterTransition = { fadeIn(navFadeSpec) },
+                exitTransition = { fadeOut(navFadeSpec) },
+                popEnterTransition = { fadeIn(navFadeSpec) },
+                popExitTransition = { fadeOut(navFadeSpec) },
             ) {
                 // --- Live, working screens (existing waves) ---
                 composable(Destination.Today.route) {
@@ -537,6 +570,58 @@ private fun navBarItemColors() = NavigationBarItemDefaults.colors(
     unselectedIconColor = Palette.textSecondary,
     unselectedTextColor = Palette.textSecondary,
 )
+
+// MARK: - Navigation motion (README §Motion)
+//
+// The global easing is the calm, decelerating cubic-bezier(0.22, 1, 0.36, 1) — nothing
+// bounces or overshoots. Top-level destination switches crossfade over ~240ms (README
+// "Tab crossfade"); the same spec drives back navigation so the bar never feels jerky.
+
+/** The calm global easing curve from the handoff (cubic-bezier 0.22, 1, 0.36, 1). */
+private val NavEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+
+/** ~240ms crossfade on the calm easing — the README "Tab crossfade" between roots. */
+private val navFadeSpec = tween<Float>(durationMillis = 240, easing = NavEasing)
+
+/**
+ * BrandMark — the NOOP logo glyph at a small in-app size: an OPEN recovery ring (≈80%
+ * arc, round caps, starting at −90° / 12 o'clock, clockwise) in the gold gradient with a
+ * solid gold core dot at the centre. This is the same brand glyph the RecoveryRing hero
+ * carries (the "O" of NOOP), shrunk for the top bar / drawer header so the logo reads in
+ * app. CLEAN/flat per the v3 restraint brief — no bloom, no halo, just the gradient ring.
+ * Token-only (gold gradient + hairline track); decorative, so it carries no content label.
+ */
+@Composable
+internal fun BrandMark(size: Dp = 22.dp) {
+    val sweep = Brush.sweepGradient(*Palette.goldGradient.toTypedArray())
+    Canvas(modifier = Modifier.size(size)) {
+        val stroke = this.size.minDimension * 0.13f          // ~2px-equivalent at 22dp
+        val radius = (this.size.minDimension - stroke) / 2f
+        val topLeft = Offset(center.x - radius, center.y - radius)
+        val arcSize = Size(radius * 2f, radius * 2f)
+        val capStroke = Stroke(width = stroke, cap = StrokeCap.Round)
+
+        // Faint full-ring track (navy hairline) behind the open arc.
+        drawCircle(
+            color = Palette.hairline.copy(alpha = 0.5f),
+            radius = radius,
+            center = center,
+            style = capStroke,
+        )
+        // Open recovery-ring arc: ~80% (288°), −90° start (12 o'clock), clockwise.
+        drawArc(
+            brush = sweep,
+            startAngle = -90f,
+            sweepAngle = 288f,
+            useCenter = false,
+            topLeft = topLeft,
+            size = arcSize,
+            style = capStroke,
+        )
+        // Solid gold "on-device core" dot at the centre.
+        drawCircle(color = Palette.gold, radius = stroke * 0.62f, center = center)
+    }
+}
 
 /** Navigate to a top-level destination with single-top + state save/restore. */
 private fun NavHostController.navigateTopLevel(route: String) {

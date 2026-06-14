@@ -12,6 +12,9 @@ struct RootTabView: View {
     @State private var quickAction: QuickAction?
     /// Drives the FAB press-state (gentle scale, dimmed gold shadow) — design-system feedback.
     @State private var fabPressed = false
+    /// Selected tab — bound so tab switches can crossfade (README §Motion: ~240ms opacity swap
+    /// between tab roots, calm easing). Defaults to Today.
+    @State private var selectedTab: Int = 0
 
     init() {
         // Plain Titanium bar: pin the background to `surfaceBase` and clear the system
@@ -32,23 +35,33 @@ struct RootTabView: View {
         // raised gold FAB is overlaid on top, bottom-centre, floating ~20pt above the bar (a
         // native TabView can't host a centre item that overflows the bar, so we float it).
         ZStack(alignment: .bottom) {
-            TabView {
-                tab(TodayView(), "Today", "circle.hexagongrid.fill")
-                tab(TrendsView(), "Trends", "chart.xyaxis.line")
-                tab(LiveView(), "Live", "waveform.path.ecg")
-                tab(SleepView(), "Sleep", "bed.double.fill")
-                moreTab
+            TabView(selection: $selectedTab) {
+                tab(TodayView(), "Today", "circle.hexagongrid.fill").tag(0)
+                tab(TrendsView(), "Trends", "chart.xyaxis.line").tag(1)
+                tab(LiveView(), "Live", "waveform.path.ecg").tag(2)
+                tab(SleepView(), "Sleep", "bed.double.fill").tag(3)
+                moreTab.tag(4)
             }
             .tint(StrandPalette.accent)
+            // Tab crossfade — README §Motion: ~240ms opacity swap between tab roots, global calm
+            // easing cubic-bezier(0.22,1,0.36,1). The native bar/gestures are untouched; the
+            // animation only governs how the selected root settles in.
+            .animation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24), value: selectedTab)
 
             centreFAB
         }
         .preferredColorScheme(.dark)
         .task { await repo.refresh() }
+        // Quick-action sheet presents with the calm easing (~0.42s) per the README sheet spec —
+        // the easing is applied where `quickAction` is set (see `presentQuickAction`), keeping the
+        // animation scoped to the sheet rather than the whole shell.
         .sheet(item: $quickAction) { action in
             quickActionDestination(action)
         }
     }
+
+    /// Calm-easing curve (cubic-bezier(0.22,1,0.36,1)) at the README sheet-present duration.
+    private static let sheetEase = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.42)
 
     // MARK: - Centre FAB
 
@@ -56,7 +69,7 @@ struct RootTabView: View {
     /// goldDeepText "+" glyph, FAB shadow `0 8 18 -6 gold@.7`. Tapping opens the quick-action sheet.
     private var centreFAB: some View {
         Button {
-            quickAction = .menu
+            withAnimation(Self.sheetEase) { quickAction = .menu }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 22, weight: .bold))
@@ -92,9 +105,11 @@ struct RootTabView: View {
         case .menu:
             QuickActionSheet { picked in
                 // Swap the menu for the chosen destination on the next runloop so the sheet
-                // re-presents cleanly (avoids dismiss/re-present races).
+                // re-presents cleanly (avoids dismiss/re-present races). Calm easing on re-present.
                 quickAction = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { quickAction = picked }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(Self.sheetEase) { quickAction = picked }
+                }
             }
             .presentationDetents([.height(280)])
             .presentationDragIndicator(.hidden)

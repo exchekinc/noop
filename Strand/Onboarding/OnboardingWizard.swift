@@ -248,20 +248,12 @@ private struct WelcomeStep: View {
         StepShell {
             VStack(spacing: 24) {
                 Spacer()
-                // The mark, with a soft halo.
-                ZStack {
-                    Circle()
-                        .fill(StrandPalette.accent)
-                        .frame(width: 120, height: 120)
-                        .blur(radius: 60)
-                        .opacity(appear ? 0.55 : 0.0)
-                        .blendMode(.plusLighter)
-                    Text("NOOP")
-                        .font(StrandFont.display(64))
-                        .foregroundStyle(StrandPalette.textPrimary)
-                        .scaleEffect(appear ? 1 : 0.92)
-                        .opacity(appear ? 1 : 0)
-                }
+                // The hero mark — the Engraved titanium BrandMark (open gold ring +
+                // core dot on a brushed-titanium tile). Clean and flat; it draws in
+                // with a calm scale + fade, no glow.
+                BrandMark(size: 120)
+                    .scaleEffect(appear ? 1 : 0.92)
+                    .opacity(appear ? 1 : 0)
                 Text("all your data, none of the cloud")
                     .font(StrandFont.title2)
                     .foregroundStyle(StrandPalette.textSecondary)

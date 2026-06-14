@@ -29,8 +29,10 @@ struct ContentView: View {
                     .zIndex(2)
             }
         }
-        .animation(.easeInOut(duration: 0.35), value: onboarded)
-        .animation(.easeInOut(duration: 0.35), value: acceptedTerms)
+        // Calm easing cubic-bezier(0.22,1,0.36,1) at the README sheet-present duration (~0.42s) for
+        // the full-screen onboarding / terms overlays — decelerating, nothing overshoots.
+        .animation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.42), value: onboarded)
+        .animation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.42), value: acceptedTerms)
         .sheet(isPresented: $showWhatsNew) {
             WhatsNewView(onClose: {
                 lastSeenChangelog = AppChangelog.currentVersion

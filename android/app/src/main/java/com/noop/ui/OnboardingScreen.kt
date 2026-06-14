@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -369,14 +370,16 @@ private fun WelcomeStep() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            // The NOOP mark on a brushed-titanium hero tile (README screen-1 "centered titanium icon").
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(150.dp)) {
                 Box(
                     modifier = Modifier
                         .size(150.dp)
                         .clip(CircleShape)
-                        .border(1.dp, Palette.accent.copy(alpha = 0.24f), CircleShape),
+                        .background(Brush.linearGradient(*Palette.titaniumGradient.toTypedArray()))
+                        .border(1.dp, Palette.hairline, CircleShape),
                 )
-                Text("NOOP", style = NoopType.display(62f), color = Palette.textPrimary)
+                BrandMark(size = 104.dp)
             }
             Spacer(Modifier.height(18.dp))
             Text(
