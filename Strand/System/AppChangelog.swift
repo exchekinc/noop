@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "3.0.1"
+    static let currentVersion = "3.0.2"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,14 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "3.0.2",
+            title: "Bluetooth stream + Apple Health sync fixes",
+            date: "June 2026",
+            items: [
+                "Fixed: a corrupt or mis-aligned Bluetooth frame could wedge the live data stream until you reconnected — NOOP now spots an impossible frame length and resyncs to the next real frame instead of stalling. Thanks @vulnix0x4 (#374).",
+                "Fixed (iPhone): the two-way Apple Health sync was reading its OWN written-back values back in as \"Apple Health\" data — which could make your strap and Apple Health plot the same line, and skew the Apple-Health average if you also wear a watch. It now excludes NOOP's own samples on read, and a failed sync no longer reports a false \"success\". Thanks @vulnix0x4 (#375).",
+            ]),
         Release(
             version: "3.0.1",
             title: "Cleaner score rings + a few fixes",

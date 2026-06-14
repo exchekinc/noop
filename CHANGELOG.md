@@ -17,6 +17,13 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 3.0.2 — Bluetooth stream + Apple Health sync fixes
+
+- **Fixed:** a corrupt/misaligned Bluetooth frame could wedge the live data stream until a reconnect — NOOP now resyncs to the next real frame. Thanks @vulnix0x4 (#374). *(Android already carried this guard.)*
+- **Fixed (iPhone):** the two-way Apple Health sync read its own write-backs (your strap + Apple Health could plot the same line; a failed sync could falsely report success) — it now excludes NOOP's own samples on read. Thanks @vulnix0x4 (#375).
+
+---
+
 ## 3.0.1 — Cleaner score rings + a few fixes
 
 - **Changed:** removed the small gold dot in the centre of the Charge / Recovery rings (behind the number) — launch feedback was that it crowded the read-out. The clean ring + number + micro-NOOP wordmark stay; the dot now lives only in the standalone logo.

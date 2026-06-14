@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "3.0.1"
+    const val CURRENT_VERSION = "3.0.2"
 
     data class Release(
         val version: String,
@@ -36,6 +36,14 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "3.0.2",
+            title = "Bluetooth stream + Apple Health sync fixes",
+            date = "June 2026",
+            items = listOf(
+                "This patch is focused on Mac/iPhone — a Bluetooth stream-resync hardening (Android already carried this guard) and an iPhone Apple Health two-way-sync fix. No Android-facing changes; versioned in lockstep. Thanks @vulnix0x4 (#374, #375).",
+            ),
+        ),
         Release(
             version = "3.0.1",
             title = "Cleaner score rings + a few fixes",
