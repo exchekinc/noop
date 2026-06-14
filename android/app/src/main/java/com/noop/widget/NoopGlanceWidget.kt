@@ -35,9 +35,9 @@ import java.util.Date
  * Renders purely from the [WidgetSnapshotStore] SharedPreferences snapshot — no BLE, no DB — so it
  * costs nothing and survives process death. Tapping anywhere opens the app.
  *
- * Colours are hardcoded mirrors of [com.noop.ui.Palette] (surfaceRaised / textPrimary / textSecondary
- * / statusPositive / statusWarning / statusCritical): Glance composes outside our theme, and the
- * widget is deliberately always-dark like the app.
+ * Colours are hardcoded mirrors of the Titanium & Gold [com.noop.ui.Palette] (navy surface / textPrimary
+ * / textSecondary, and the gold → amber → burnt-orange recovery tiers): Glance composes outside our
+ * theme, and the widget is deliberately always-dark like the app.
  */
 class NoopGlanceWidget : GlanceAppWidget() {
 
@@ -64,16 +64,16 @@ class NoopGlanceWidget : GlanceAppWidget() {
     }
 }
 
-private val surface = ColorProvider(Color(0xFF0D1512))
-private val textPrimary = ColorProvider(Color(0xFFF4F7F5))
-private val textSecondary = ColorProvider(Color(0xFF8B9690))
+private val surface = ColorProvider(Color(0xFF0A1322))
+private val textPrimary = ColorProvider(Color(0xFFF4F6F8))
+private val textSecondary = ColorProvider(Color(0xFF8A94A4))
 
 /** Recovery-band colour, the app-wide 67 / 34 cuts (RecoveryScorer.band). */
 private fun bandColor(recovery: Int): ColorProvider = ColorProvider(
     when {
-        recovery >= 67 -> Color(0xFF18C98B)
-        recovery >= 34 -> Color(0xFFF5A623)
-        else -> Color(0xFFFF4F73)
+        recovery >= 67 -> Color(0xFFE8B84B)
+        recovery >= 34 -> Color(0xFFD98A3D)
+        else -> Color(0xFFE0662F)
     },
 )
 

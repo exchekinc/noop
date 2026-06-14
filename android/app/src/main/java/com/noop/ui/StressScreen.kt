@@ -892,15 +892,16 @@ private enum class StressBand(val title: String, val tone: StrandTone) {
     }
 }
 
-// MARK: - Stress ramp (its own scale: calm blue → balanced mint → tense amber)
+// MARK: - Stress ramp (its own scale: calm blue → balanced gold → tense burnt-orange)
 //
 // Deliberately distinct from the recovery ramp — low stress reads cool/blue, rising
-// stress warms toward amber. Never the red→green recovery traffic light.
+// stress warms through gold toward burnt orange. The 3-stop blue→gold→orange ramp matches
+// the Apple StressRamp and the gauge's Palette.stressGradientStops. No green anywhere.
 
 private object StressRamp {
-    val CALM = Color(0xFF4FA9C9)   // cool blue — low
-    val STEADY = Color(0xFF5BD3A0) // mint — balanced
-    val TENSE = Color(0xFFE8C24B)  // amber — high
+    val CALM = Palette.sleepLight       // blue — low
+    val STEADY = Palette.gold           // gold — balanced
+    val TENSE = Palette.statusCritical  // burnt orange — high
 
     private val stops: List<Pair<Float, Color>> = listOf(
         0.00f to CALM,

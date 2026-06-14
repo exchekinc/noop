@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Adaptive launcher background: deep navy canvas (#0A1322) for the Titanium & Gold mark. -->
+<!-- Adaptive launcher background: brushed-titanium gradient tile. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#0A1322" android:pathData="M0,0h108v108h-108z"/>
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="6" android:startY="6" android:endX="102" android:endY="102"
+                android:startColor="#D7DCE1" android:centerColor="#9CA4AC" android:endColor="#646D75"/>
+        </aapt:attr>
+    </path>
 </vector>

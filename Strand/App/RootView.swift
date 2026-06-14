@@ -93,7 +93,7 @@ struct RootView: View {
             VStack(spacing: 0) {
                 List(NavItem.allCases, selection: $selection) { item in
                     Label(item.titleKey, systemImage: item.icon)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(StrandFont.rounded(13, weight: .medium))
                         .tag(item)
                 }
                 .listStyle(.sidebar)
@@ -119,7 +119,7 @@ struct RootView: View {
                 .frame(width: 8, height: 8)
                 .shadow(color: StrandPalette.accent.opacity(0.8), radius: 4)
             Text("NOOP")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(StrandFont.rounded(20, weight: .bold))
                 .foregroundStyle(StrandPalette.textPrimary)
             Spacer()
         }
@@ -165,10 +165,10 @@ private struct SidebarStatus: View {
                 .shadow(color: statusColor.opacity(0.6), radius: live.connected ? 4 : 0)
             VStack(alignment: .leading, spacing: 1) {
                 Text(statusText)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(StrandFont.rounded(12, weight: .medium))
                     .foregroundStyle(StrandPalette.textPrimary)
                 Text(live.batteryPct.map { "Battery \(Int($0))%" } ?? "Strap not connected")
-                    .font(.system(size: 11))
+                    .font(StrandFont.rounded(11))
                     .foregroundStyle(StrandPalette.textTertiary)
             }
             Spacer()

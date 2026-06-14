@@ -58,7 +58,7 @@ public struct MenuBarLabel: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(dotColor)
             Text(displayHR.map(String.init) ?? "—")
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(StrandFont.rounded(12, weight: .semibold))
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(displayHR.map { "Heart rate \($0) beats per minute" } ?? "Strap not connected")

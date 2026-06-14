@@ -128,7 +128,7 @@ struct SupportView: View {
                     ForEach(ProjectInfo.donations) { coin in
                         let on = selected == coin.symbol
                         Button { withAnimation(.easeOut(duration: 0.15)) { selected = coin.symbol } } label: {
-                            Text(coin.symbol).font(.system(size: 12, weight: .bold))
+                            Text(coin.symbol).font(StrandFont.rounded(12, weight: .bold))
                                 .padding(.horizontal, 14).padding(.vertical, 7)
                                 .background(Capsule().fill(on ? StrandPalette.accent : StrandPalette.surfaceInset))
                                 .foregroundStyle(on ? StrandPalette.surfaceBase : StrandPalette.textSecondary)
