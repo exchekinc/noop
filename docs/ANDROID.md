@@ -221,7 +221,7 @@ the `app` configuration on a physical device.
 
 ## Installing the APK (sideload & Play Protect)
 
-The released `NOOP-full.apk` (and `NOOP-demo.apk`) is an **unsigned, source-available APK** — there
+The released `NOOP-full.apk` is an **unsigned, source-available APK** — there
 is no Play Store listing, because the project is anonymous and has no paid Play identity to publish
 or sign under. That's deliberate, but it means Android treats NOOP as an "unknown app" and **Google
 Play Protect** may warn or block on install — most stubbornly on stock Pixel / recent Android.
@@ -238,8 +238,9 @@ Nothing is wrong with the file; it's just missing a Play signature. To get it on
    private on-device storage, so uninstalling and reinstalling simply starts fresh — there's no cloud
    copy to lose, and nothing leaves the device either way.
 
-The demo APK installs alongside the full app (distinct `applicationId`), so you can keep both; the
-same Play Protect prompts apply to each.
+A sample-data **demo** flavour still exists for exploring every screen with no strap, but it's
+**build-from-source only** (`./gradlew assembleDemoDebug`) and is no longer published as a release
+asset. It installs alongside the full app (distinct `applicationId`), so you can keep both.
 
 ---
 

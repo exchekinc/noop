@@ -91,7 +91,6 @@ Pre-built apps you can run right now:
 |---|---|---|
 | **macOS** | `NOOP.app` (see [Releases](../../releases)) or `brew install --cask noopapp/noop/noop` | Apple Silicon + Intel. Drag to Applications. Not notarized — see **First launch on macOS** below. Homebrew needs a one-time `brew trust noopapp/noop` first (Homebrew 6.0+) — see [Homebrew docs](docs/HOMEBREW.md). |
 | **Android** | `NOOP-full.apk` (see [Releases](../../releases)) | The full app. `minSdk 26` (Android 8+). Sideload — enable "install unknown apps". Blocked by Play Protect? See **Installing on Android** below. |
-| **Android (demo)** | `NOOP-demo.apk` | Preloaded with sample data so you can explore every screen with no strap. Installs alongside the full app. |
 | **iOS** | `NOOP-vX-ios.ipa` (see [Releases](../../releases)) — sideload with AltStore/SideStore | Now a **direct download**. The `.ipa` is unsigned; **you** sign it on your iPhone with your own free Apple ID (no App Store, no developer account — NOOP stays anonymous). Re-signs every 7 days (AltStore automates it); Apple Health + Live Activity widgets may be limited under a free signing identity. See [docs/IOS.md](docs/IOS.md). Or build from source in Xcode. |
 
 > **First launch on macOS.** NOOP is **not notarized** by Apple — notarization needs a paid Apple
