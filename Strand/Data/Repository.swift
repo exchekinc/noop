@@ -415,34 +415,14 @@ final class Repository: ObservableObject {
     func editSleepTimes(detectedStartTs: Int, oldEndTs: Int, storedStagesJSON: String?,
                         newStartTs: Int, newEndTs: Int) async {
         guard let store = await ensureStore() else { return }
-        // Raw streams live under the strap `deviceId`; read a 1h margin around the corrected window.
-        let lo = newStartTs - 3_600, hi = newEndTs + 3_600
-        let grav = (try? await store.gravitySamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
-        let inWindowGravity = grav.lazy.filter { $0.ts >= newStartTs && $0.ts <= newEndTs }.count
-        let windowSeconds = max(1, newEndTs - newStartTs)
-        // Re-derive stages from raw only when the strap DENSELY covers the window (a real worn night) —
-        // a couple of stray samples (e.g. an imported night with incidental strap data) must NOT trigger
-        // a degenerate stageSession that overwrites a good breakdown. ~1 sample / 2 min is the floor.
-        let hasStageableData = inWindowGravity >= max(20, windowSeconds / 120)
-
-        let stagesJSON: String?
-        if hasStageableData {
-            let hr = (try? await store.hrSamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
-            let rr = (try? await store.rrIntervals(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
-            let resp = (try? await store.respSamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
-            // Stage OFF the main actor — Repository is @MainActor and staging a multi-hour window from
-            // tens of thousands of samples would otherwise freeze the UI on Save (mirrors analyzeRecent).
-            let segs = await Task.detached(priority: .utility) {
-                SleepStager.stageSession(start: newStartTs, end: newEndTs,
-                                         grav: grav, hr: hr, rr: rr, resp: resp)
-            }.value
-            stagesJSON = AnalyticsEngine.encodeStages(segs)
-        } else {
-            // No usable strap data (imported night): reshape the stored summary on the wake side. Onset
-            // edits on such nights move only the effective bedtime/`startTsAdjusted`, not the timeline.
-            stagesJSON = SleepWindowReclip.reclip(stagesJSON: storedStagesJSON, sessionStart: detectedStartTs,
-                                                  oldEnd: oldEndTs, newEnd: newEndTs)
-        }
+        // Re-derive stages from the raw streams for the corrected window; fall back to reshaping the
+        // stored summary when the strap has no dense data there yet. The fallback fires for a genuine
+        // imported night (no strap data at all) AND for the transient case where the user edits BEFORE
+        // a sync has imported this window — the latter then self-heals on the next post-sync
+        // `analyzeRecent` (see `selfHealEditedStages`), which re-derives the real stages once raw lands.
+        let stagesJSON = await restageFromRaw(start: newStartTs, end: newEndTs)
+            ?? SleepWindowReclip.reclip(stagesJSON: storedStagesJSON, sessionStart: detectedStartTs,
+                                        oldEnd: oldEndTs, newEnd: newEndTs)
         // Apply to the source that actually OWNS this block. Try the computed source first; only fall
         // back to the imported source when no computed row matched — so we never edit a coincidental
         // same-startTs row in the other namespace (which the old unconditional double-write could do).
@@ -455,6 +435,62 @@ final class Repository: ObservableObject {
                 newStartTs: newStartTs, newEndTs: newEndTs, stagesJSON: stagesJSON)
         }
         await refresh()
+    }
+
+    /// Re-derive stages from the raw streams for `[start, end]` (read under the strap `deviceId`),
+    /// returning the encoded `stagesJSON`, or `nil` when the strap does NOT densely cover the window —
+    /// i.e. there isn't enough worn-night data to stage (a couple of stray samples must not trigger a
+    /// degenerate `stageSession` that overwrites a good breakdown). ~1 sample / 2 min is the floor.
+    /// Extracted from `editSleepTimes` so the post-sync self-heal reuses the exact density gate +
+    /// staging. Stages OFF the main actor — Repository is `@MainActor` and a multi-hour window is tens of
+    /// thousands of samples, which would otherwise freeze the UI.
+    private func restageFromRaw(start: Int, end: Int) async -> String? {
+        guard let store = await ensureStore() else { return nil }
+        let lo = start - 3_600, hi = end + 3_600
+        let grav = (try? await store.gravitySamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+        let inWindowGravity = grav.lazy.filter { $0.ts >= start && $0.ts <= end }.count
+        let windowSeconds = max(1, end - start)
+        guard inWindowGravity >= max(20, windowSeconds / 120) else { return nil }
+        let hr = (try? await store.hrSamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+        let rr = (try? await store.rrIntervals(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+        let resp = (try? await store.respSamples(deviceId: deviceId, from: lo, to: hi, limit: 200_000)) ?? []
+        let segs = await Task.detached(priority: .utility) {
+            SleepStager.stageSession(start: start, end: end, grav: grav, hr: hr, rr: rr, resp: resp)
+        }.value
+        return AnalyticsEngine.encodeStages(segs)
+    }
+
+    /// Self-heal pass for the edit-races-sync bug. A night edited BEFORE the strap sync imported its raw
+    /// streams got fabricated `SleepWindowReclip` stages (a trailing "awake" block) at edit time, and the
+    /// `userEdited` flag then froze that breakdown against every later sync. Here — invoked from
+    /// `analyzeRecent`, which runs after each sync backfill — we re-derive stages from the now-available
+    /// raw over each edited night's LOCKED bounds and rewrite the stage breakdown ONLY, never the user's
+    /// bed/wake correction. Idempotent: a night already staged from raw re-derives to the same JSON
+    /// (equality-skip, no write); a night edited-too-early heals the moment its raw arrives; a true
+    /// imported night (raw never dense) is left untouched (`restageFromRaw` returns nil). Reads/writes the
+    /// COMPUTED source — the same one `analyzeRecent` reads edited rows from. Returns the (possibly
+    /// refreshed) edited rows so the caller recomputes daily aggregates from the corrected stages.
+    func selfHealEditedStages(from windowStart: Int, to windowEnd: Int) async -> [CachedSleepSession] {
+        guard let store = await ensureStore() else { return [] }
+        func editedRows() async -> [CachedSleepSession] {
+            ((try? await store.sleepSessions(deviceId: computedDeviceId, from: windowStart,
+                                             to: windowEnd, limit: 100_000)) ?? [])
+                .filter { $0.userEdited }
+        }
+        let edited = await editedRows()
+        guard !edited.isEmpty else { return [] }
+        var healed = false
+        for row in edited {
+            // Re-derive over the LOCKED corrected window (effective onset → wake). Skip when the raw
+            // isn't dense yet, or when the result already matches what's stored (steady state — no write).
+            guard let newJSON = await restageFromRaw(start: row.effectiveStartTs, end: row.endTs),
+                  newJSON != row.stagesJSON else { continue }
+            let n = (try? await store.updateSleepStages(deviceId: computedDeviceId,
+                                                        detectedStartTs: row.startTs,
+                                                        stagesJSON: newJSON)) ?? 0
+            if n > 0 { healed = true }
+        }
+        return healed ? await editedRows() : edited
     }
 
     // MARK: - Metric explorer reads (generic substrate)

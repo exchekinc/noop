@@ -248,6 +248,92 @@ final class AnalyticsEngineTests: XCTestCase {
         XCTAssertNotNil(SleepStageTotals.minutes(fromStagesJSON: json))
     }
 
+    func testEncodeStagesIsDeterministic() throws {
+        // The post-sync self-heal re-derives an edited night's stages each pass and skips the DB write
+        // when the new JSON equals the stored one. That idempotency depends on encodeStages producing
+        // byte-identical output for identical input (stable key + array order) — guard it here.
+        let segs = [StageSegment(start: 0, end: 600, stage: "light"),
+                    StageSegment(start: 600, end: 900, stage: "deep"),
+                    StageSegment(start: 900, end: 1200, stage: "rem")]
+        let a = try XCTUnwrap(AnalyticsEngine.encodeStages(segs))
+        let b = try XCTUnwrap(AnalyticsEngine.encodeStages(segs))
+        XCTAssertEqual(a, b, "encodeStages must be deterministic so the heal's equality-skip holds")
+    }
+
+    /// End-to-end of the edit-races-sync fix. Mirrors `Repository.selfHealEditedStages`' per-night recipe
+    /// with the REAL components (store insert → density gate → SleepStager.stageSession → encodeStages →
+    /// updateSleepStages). Covers all three behaviors: a night edited before its raw synced heals to real
+    /// stages once raw lands; a night with no raw stays as-is; and a second pass is a no-op (idempotent).
+    func testSelfHealRecipeHealsEditedNightOnceRawArrives() async throws {
+        let store = try await WhoopStore.inMemory()
+        let strap = "strap", computed = "strap-noop"
+
+        // Per-night heal recipe — exactly what selfHealEditedStages runs for each userEdited row.
+        func heal() async throws {
+            let edited = (try await store.sleepSessions(deviceId: computed, from: 0, to: .max, limit: 100))
+                .filter { $0.userEdited }
+            for row in edited {
+                let lo = row.effectiveStartTs - 3_600, hi = row.endTs + 3_600
+                let grav = try await store.gravitySamples(deviceId: strap, from: lo, to: hi, limit: 200_000)
+                let inWindow = grav.filter { $0.ts >= row.effectiveStartTs && $0.ts <= row.endTs }.count
+                guard inWindow >= max(20, (row.endTs - row.effectiveStartTs) / 120) else { continue }
+                let hr = try await store.hrSamples(deviceId: strap, from: lo, to: hi, limit: 200_000)
+                let rr = try await store.rrIntervals(deviceId: strap, from: lo, to: hi, limit: 200_000)
+                let segs = SleepStager.stageSession(start: row.effectiveStartTs, end: row.endTs,
+                                                    grav: grav, hr: hr, rr: rr, resp: [])
+                guard let newJSON = AnalyticsEngine.encodeStages(segs), newJSON != row.stagesJSON else { continue }
+                try await store.updateSleepStages(deviceId: computed, detectedStartTs: row.startTs,
+                                                  stagesJSON: newJSON)
+            }
+        }
+        func nonWakeStageCount(_ json: String?) throws -> Int {
+            let segs = try JSONDecoder().decode([StageSegment].self, from: Data(try XCTUnwrap(json).utf8))
+            return segs.filter { $0.stage != "wake" }.count
+        }
+
+        // Night A — edited BEFORE its raw synced (bounds corrected, stages fabricated to one "wake" block),
+        // and the strap sync then delivers dense raw for its window.
+        let a = night(endDay: "2021-06-22", hours: 6)
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: a.start, endTs: a.end, efficiency: 0.9,
+                                restingHr: 50, avgHrv: 60, stagesJSON: nil)], deviceId: computed)
+        let fabricatedA = "[{\"end\":\(a.end),\"stage\":\"wake\",\"start\":\(a.start)}]"
+        try await store.applySleepEdit(deviceId: computed, detectedStartTs: a.start,
+                                       newStartTs: a.start, newEndTs: a.end, stagesJSON: fabricatedA)
+        _ = try await store.insert(Streams(hr: a.hr, rr: a.rr, gravity: a.gravity), deviceId: strap)
+
+        // Night B — also edited-before-sync, but its raw NEVER arrives (no insert): must stay fabricated.
+        let b = night(endDay: "2021-06-20", hours: 6)
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: b.start, endTs: b.end, efficiency: 0.9,
+                                restingHr: 50, avgHrv: 60, stagesJSON: nil)], deviceId: computed)
+        let fabricatedB = "[{\"end\":\(b.end),\"stage\":\"wake\",\"start\":\(b.start)}]"
+        try await store.applySleepEdit(deviceId: computed, detectedStartTs: b.start,
+                                       newStartTs: b.start, newEndTs: b.end, stagesJSON: fabricatedB)
+
+        try await heal()
+
+        let rows = try await store.sleepSessions(deviceId: computed, from: 0, to: .max, limit: 100)
+        let rowA = try XCTUnwrap(rows.first { $0.startTs == a.start })
+        let rowB = try XCTUnwrap(rows.first { $0.startTs == b.start })
+
+        // A healed to real stages; bounds + flag intact.
+        XCTAssertNotEqual(rowA.stagesJSON, fabricatedA, "A's fabricated awake block was replaced")
+        XCTAssertGreaterThan(try nonWakeStageCount(rowA.stagesJSON), 0, "A recovered real sleep stages")
+        XCTAssertEqual(rowA.effectiveStartTs, a.start, "A onset preserved")
+        XCTAssertEqual(rowA.endTs, a.end, "A wake preserved")
+        XCTAssertTrue(rowA.userEdited)
+        // B had no raw → untouched.
+        XCTAssertEqual(rowB.stagesJSON, fabricatedB, "B has no raw, so it stays as-edited (not clobbered)")
+
+        // Idempotent: a second pass re-derives the same JSON for A and writes nothing.
+        let snapshot = rowA.stagesJSON
+        try await heal()
+        let after = try await store.sleepSessions(deviceId: computed, from: 0, to: .max, limit: 100)
+        XCTAssertEqual(try XCTUnwrap(after.first { $0.startTs == a.start }).stagesJSON, snapshot,
+                       "second heal pass is a no-op (idempotent)")
+    }
+
     func testAnalyzeDayWithoutNewStreamsLeavesParityFieldsNil() {
         // Pure-function contract: callers that don't supply steps/skinTemp (all pre-existing
         // call sites and tests) get nil steps + nil skinTempDevC — never a fabricated value.

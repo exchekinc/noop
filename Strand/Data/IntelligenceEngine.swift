@@ -274,9 +274,12 @@ final class IntelligenceEngine: ObservableObject {
         // edit to an IMPORTED (WHOOP-export) night updates the displayed session, but its dashboard
         // recovery/performance come verbatim from the export and are NOT recomputed here (we don't
         // reproduce WHOOP's cloud scoring). That's an accepted limitation, documented on the PR.
-        let editedRows = ((try? await store.sleepSessions(deviceId: computedId, from: windowStart,
-                                                          to: now, limit: 100_000)) ?? [])
-            .filter { $0.userEdited }
+        // Self-heal any night edited before its raw streams synced (see `Repository.selfHealEditedStages`):
+        // re-derive stages from the now-available raw over the night's locked bounds, then return the
+        // refreshed rows so the daily aggregate below scores the corrected breakdown. A no-op for nights
+        // already staged from raw (idempotent) and for imported nights (raw never dense). This MUST run
+        // before the scoring loop so the healed stages flow into Rest/recovery this same pass.
+        let editedRows = await repo.selfHealEditedStages(from: windowStart, to: now)
         let editsByStart = Dictionary(editedRows.map { ($0.startTs, $0) }, uniquingKeysWith: { a, _ in a })
         for night in scoredNights {
             let daily = sleepEditedDaily(night.daily, detected: night.cachedSleep, editsByStart: editsByStart)

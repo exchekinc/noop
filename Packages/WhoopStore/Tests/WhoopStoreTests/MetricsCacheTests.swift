@@ -146,6 +146,53 @@ final class MetricsCacheTests: XCTestCase {
         XCTAssertEqual(rows[0].efficiency, 0.95, "vitals still refresh")
     }
 
+    // MARK: - self-heal: re-derive stages for a night edited before its raw synced
+
+    /// `updateSleepStages` replaces ONLY the stage breakdown of an already user-edited night, leaving the
+    /// corrected bed/wake bounds and the `userEdited` flag intact. This is the seam the post-sync self-heal
+    /// uses to swap a night's fabricated `SleepWindowReclip` tail (produced when it was edited before its
+    /// raw streams synced) for the real re-derived stages once the raw lands.
+    func testUpdateSleepStagesReplacesStagesOnlyAndPreservesBounds() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.9,
+                                restingHr: 52, avgHrv: 60, stagesJSON: "[\"detected\"]")],
+            deviceId: "devA")
+        // Edit before sync: wake extended, onset nudged, stages fabricated to a single trailing "wake" block.
+        try await store.applySleepEdit(deviceId: "devA", detectedStartTs: 1000, newStartTs: 1200,
+                                       newEndTs: 6000,
+                                       stagesJSON: "[{\"start\":1200,\"end\":6000,\"stage\":\"wake\"}]")
+        // Self-heal once raw arrives: real re-derived stages replace the fabricated block.
+        let real = "[{\"start\":1200,\"end\":4000,\"stage\":\"deep\"}," +
+                   "{\"start\":4000,\"end\":6000,\"stage\":\"rem\"}]"
+        let changed = try await store.updateSleepStages(deviceId: "devA", detectedStartTs: 1000,
+                                                        stagesJSON: real)
+        XCTAssertEqual(changed, 1)
+        let rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 10)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].stagesJSON, real, "stages replaced with the re-derived breakdown")
+        XCTAssertEqual(rows[0].startTsAdjusted, 1200, "corrected onset preserved")
+        XCTAssertEqual(rows[0].endTs, 6000, "corrected wake preserved")
+        XCTAssertTrue(rows[0].userEdited, "still flagged user-edited")
+    }
+
+    /// Guard: the self-heal must NEVER rewrite an un-edited night (those are already freely re-derivable on
+    /// every recompute — touching them is out of scope and would risk clobbering a good import). Scoped to
+    /// `userEdited = 1`, so an un-edited row is a no-op.
+    func testUpdateSleepStagesIsNoopOnUneditedRow() async throws {
+        let store = try await WhoopStore.inMemory()
+        try await store.upsertSleepSessions(
+            [CachedSleepSession(startTs: 1000, endTs: 5000, efficiency: 0.9,
+                                restingHr: 52, avgHrv: 60, stagesJSON: "[\"orig\"]")],
+            deviceId: "devA")   // userEdited defaults to false
+        let changed = try await store.updateSleepStages(deviceId: "devA", detectedStartTs: 1000,
+                                                        stagesJSON: "[\"should-not-apply\"]")
+        XCTAssertEqual(changed, 0, "un-edited nights are left untouched")
+        let rows = try await store.sleepSessions(deviceId: "devA", from: 0, to: 100_000, limit: 10)
+        XCTAssertEqual(rows[0].stagesJSON, "[\"orig\"]")
+        XCTAssertFalse(rows[0].userEdited)
+    }
+
     /// The crux of the feature: once a user has corrected a night's wake time, the next strap sync's
     /// recompute (which re-upserts the strap-detected session over the same natural key with
     /// `userEdited == false`) must NOT revert the corrected `endTs` or clear the flag — but it MAY still

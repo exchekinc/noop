@@ -108,8 +108,14 @@ public enum AnalyticsEngine {
     }
 
     /// JSON-encode stage segments to the verbatim array shape CachedSleepSession stores.
+    /// `.sortedKeys` makes the output deterministic — JSONEncoder otherwise emits object keys in an
+    /// unstable order (it can vary call to call), which would make stored stage JSON non-reproducible
+    /// and defeat the post-sync self-heal's "skip the write when the re-derived JSON is unchanged" check.
+    /// Decoders are key-order-independent, so this is purely a stabilization.
     public static func encodeStages(_ stages: [StageSegment]) -> String? {
-        guard let data = try? JSONEncoder().encode(stages) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(stages) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

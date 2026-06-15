@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "4.2.1"
+    static let currentVersion = "4.2.2"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "4.2.2",
+            title: "Sleep stages heal themselves after a sync",
+            date: "June 2026",
+            items: [
+                "**Fixed wrong sleep stages when you edited a night before it finished syncing.** If you corrected a night's wake time before the strap had imported that window's raw data, the stage breakdown could come out wrong — and stay wrong forever. Now the stages re-derive themselves from the real data the moment it arrives, while keeping your bed/wake correction locked. Affected nights heal automatically on the next sync. Thanks @claypilat (#449).",
+            ]),
         Release(
             version: "4.2.1",
             title: "Optional inactivity nudge",

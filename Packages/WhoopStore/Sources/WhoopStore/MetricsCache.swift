@@ -131,6 +131,26 @@ extension WhoopStore {
         }
     }
 
+    /// Replace ONLY the stage breakdown of an already user-edited night, leaving the corrected bed/wake
+    /// bounds (`startTsAdjusted`/`endTs`) and the `userEdited` flag untouched. The post-sync self-heal
+    /// calls this when a strap sync finally delivers the raw streams for a night that was edited BEFORE
+    /// they arrived: at edit time the stages were fabricated by `SleepWindowReclip` (a trailing "awake"
+    /// block) because the raw wasn't present yet, and `userEdited` then froze that breakdown against every
+    /// later sync. This swaps in the real re-derived stages without disturbing the user's bound correction.
+    /// Scoped to `userEdited = 1` rows so it can never rewrite an un-edited (freely re-derivable) night.
+    /// Returns rows changed (0 when no such edited session exists).
+    @discardableResult
+    public func updateSleepStages(deviceId: String, detectedStartTs: Int, stagesJSON: String) async throws -> Int {
+        try syncWrite { db in
+            try db.execute(sql: """
+                UPDATE sleepSession
+                SET stagesJSON = ?
+                WHERE deviceId = ? AND startTs = ? AND userEdited = 1
+                """, arguments: [stagesJSON, deviceId, detectedStartTs])
+            return db.changesCount
+        }
+    }
+
     /// Upsert cached daily metrics. Natural key (deviceId, day). Returns rows changed.
     @discardableResult
     public func upsertDailyMetrics(_ days: [DailyMetric], deviceId: String) async throws -> Int {
