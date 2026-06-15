@@ -1388,10 +1388,19 @@ private struct SleepTimeEditor: View {
         _wake = State(initialValue: Date(timeIntervalSince1970: TimeInterval(wakeTs)))
     }
 
-    /// Wake must land after bedtime (≥ 1 min) and within a day of it — so the picker can't offer a wake
-    /// before you fell asleep, and moving bedtime past wake nudges wake along with it.
-    private var wakeRange: ClosedRange<Date> {
-        bed.addingTimeInterval(60) ... bed.addingTimeInterval(24 * 3600)
+    /// The wake instant to save: the picked wake TIME-OF-DAY landed on the FIRST occurrence strictly after
+    /// bedtime (within 24h). The Woke picker is time-only — its calendar day is always DERIVED from bed
+    /// here — so a wake can never be dragged onto an unrelated day. That independent wake-date drag was
+    /// what silently re-bucketed a night onto the wrong day and split its stages/totals across two days
+    /// (the edit-scramble half of #406). For a normal 23:00→07:00 night this resolves 07:00 to the next
+    /// morning; for a short evening nap it resolves to the same evening.
+    private func resolvedWake() -> Date {
+        let cal = Calendar.current
+        let hm = cal.dateComponents([.hour, .minute], from: wake)
+        // `nextDate(after:matching:)` returns the first instant with that hour:minute within 24h after the
+        // anchor, so starting one minute past bed keeps wake strictly after bedtime and inside (bed, bed+24h].
+        return cal.nextDate(after: bed.addingTimeInterval(60), matching: hm, matchingPolicy: .nextTime)
+            ?? bed.addingTimeInterval(8 * 3600)
     }
 
     var body: some View {
@@ -1409,8 +1418,10 @@ private struct SleepTimeEditor: View {
                         .font(StrandFont.body)
                         .tint(StrandPalette.restColor)
                     Divider().overlay(StrandPalette.hairline)
-                    DatePicker("Woke", selection: $wake, in: wakeRange,
-                               displayedComponents: [.date, .hourAndMinute])
+                    // Time-only on purpose — the wake's calendar day is derived from bed (see resolvedWake),
+                    // so an edit can't move the night to a different day and scramble its stages/totals (#406).
+                    DatePicker("Woke", selection: $wake,
+                               displayedComponents: [.hourAndMinute])
                         .datePickerStyle(.compact)
                         .font(StrandFont.body)
                         .tint(StrandPalette.restColor)
@@ -1425,7 +1436,7 @@ private struct SleepTimeEditor: View {
                 Button(saving ? "Saving…" : "Save") {
                     saving = true
                     Task {
-                        await onSave(Int(bed.timeIntervalSince1970), Int(wake.timeIntervalSince1970))
+                        await onSave(Int(bed.timeIntervalSince1970), Int(resolvedWake().timeIntervalSince1970))
                         dismiss()
                     }
                 }

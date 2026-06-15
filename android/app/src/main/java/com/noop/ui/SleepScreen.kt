@@ -765,20 +765,32 @@ private fun NightNavHeader(
         }
     }
 
-    // Wake-up time picker.
+    // Wake-up time picker — TIME-ONLY; its calendar day is always DERIVED from bedtime, never the
+    // original detected wake day. Picking a wake time-of-day lands it on the FIRST occurrence strictly
+    // after the effective bed instant (within 24h), so a 23:00→07:00 night resolves 07:00 to the next
+    // morning and an evening nap resolves to the same evening. An independent wake date was what let an
+    // edit silently re-bucket a night onto the wrong day (selectNight keys the day off endTs) and split
+    // its stages/totals across two days — the edit-scramble half of #406. Mirrors the iOS sleep-edit
+    // cross-day constraint (SleepView.SleepTimeEditor.resolvedWake).
     if (editingWake && session != null) {
         val endCal = Calendar.getInstance().apply { timeInMillis = session.endTs * 1000L }
         DisposableEffect(Unit) {
             val dialog = TimePickerDialog(
                 context,
                 { _, h, m ->
+                    // Land the picked hour:minute on the first instant strictly after bed: start at the
+                    // bed day, set the time-of-day, then roll forward one day if that is at or before bed
+                    // (keeps wake inside (bed, bed+24h], matching iOS's nextDate(after: bed+60s)).
+                    val bedTs = session.effectiveStartTs
                     val cal = Calendar.getInstance().apply {
-                        timeInMillis = session.endTs * 1000L
+                        timeInMillis = bedTs * 1000L
                         set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m)
+                        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                        if (timeInMillis / 1000L <= bedTs) add(Calendar.DAY_OF_MONTH, 1)
                     }
                     // Pass the EFFECTIVE onset so a wake-only edit preserves a previously-edited
                     // bedtime (startTsAdjusted) rather than resetting it to the detected startTs. (PR #395)
-                    onUpdateTimes(session, session.effectiveStartTs, cal.timeInMillis / 1000L)
+                    onUpdateTimes(session, bedTs, cal.timeInMillis / 1000L)
                     editingWake = false
                 },
                 endCal.get(Calendar.HOUR_OF_DAY),

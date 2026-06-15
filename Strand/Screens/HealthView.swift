@@ -825,10 +825,18 @@ private struct VitalitySection: View {
         let rhrs = last7.compactMap { $0.restingHr }.map(Double.init)
         let steps = last7.compactMap { $0.steps }.map(Double.init)
         func mean(_ a: [Double]) -> Double? { a.isEmpty ? nil : a.reduce(0, +) / Double(a.count) }
+        // Aggregate EXACTLY as the stored headline does (IntelligenceEngine), so this "what's driving it"
+        // breakdown reconciles with the Vitality / Body Age number it explains rather than being recomputed
+        // on different statistics: resting HR + HRV are MEDIANED (robust to one outlier night), sleep +
+        // steps are MEANED. Using the mean for all four let a single bad RHR/HRV reading drift the breakdown
+        // out of step with the median-based headline (code review).
         return VitalityEngine.contributions(.init(
-            chronoAge: Double(profile.age), restingHR: mean(rhrs), sleepHours: mean(nights),
+            chronoAge: Double(profile.age),
+            restingHR: rhrs.isEmpty ? nil : IntelligenceEngine.medianOf(rhrs),
+            sleepHours: mean(nights),
             sleepConsistency: VitalityEngine.sleepConsistency(nightlyHours: nights),
-            rmssd: mean(hrvs), rmssdNorm: VitalityEngine.rmssdNorm(forAge: Double(profile.age)),
+            rmssd: hrvs.isEmpty ? nil : IntelligenceEngine.medianOf(hrvs),
+            rmssdNorm: VitalityEngine.rmssdNorm(forAge: Double(profile.age)),
             steps: mean(steps)))
     }
 

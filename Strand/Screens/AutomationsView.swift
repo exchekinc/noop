@@ -145,7 +145,7 @@ struct AutomationsView: View {
                     .frame(minHeight: 42).padding(.vertical, 4)
                 }
                 if behavior.smartAlarmEnabled {
-                    Text("On WHOOP 5/MG this is experimental — arming is confirmed, but a strap-driven wake-up hasn't been verified yet, so don't rely on it as your only alarm there. WHOOP 4 is the proven path.")
+                    Text("Experimental. NOOP arms the strap's own alarm and the strap acknowledges it, but a strap-driven wake-up hasn't been verified firing from a report yet — on WHOOP 4.0 or 5/MG — so please keep a backup alarm on your phone for now. We're confirming the exact firmware buzz pattern before we call this proven.")
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)

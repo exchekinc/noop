@@ -112,11 +112,20 @@ public enum WhoopCommand: UInt8, CaseIterable {
 
     // MARK: Payload builders
 
-    /// SET_ALARM_TIME (66) payload: Rev1 form (observed).
+    /// SET_ALARM_TIME (66) payload: Rev1 form.
     /// Layout: `[0x01] + <epoch u32 LE> + [0x00, 0x00]` = 7 bytes total.
     /// The leading 0x01 is the sub-command / form byte; the 2-byte subseconds field is zero
     /// (the strap only uses the seconds portion). Always send SET_CLOCK (cmd 10) first so the
     /// strap RTC is UTC-correct, otherwise the alarm fires at the wrong wall-clock time.
+    ///
+    /// ⚠️ UNCONFIRMED — carries the wake TIME only, no haptic pattern or alarmId. On #428 the strap
+    /// ACKed this and logged "armed", but never buzzed at the wake time (no STRAP_DRIVEN_ALARM_EXECUTED
+    /// event). Contrast the WHOOP 5/MG REVISION_4 form (`AlarmPayload.setAlarmRev4`, 20 bytes) which
+    /// EMBEDS the waveform pattern in the body — the 4.0 firmware most likely needs the same (an alarmId
+    /// + waveform/loop/duration), and possibly a different leading form byte. There is no golden test
+    /// pinning these bytes. Until a real wire capture from the official app confirms the layout, the
+    /// WHOOP 4.0 smart alarm is presented as experimental (see AutomationsView) — do NOT add a guessed
+    /// pattern here; reverse-engineer the real frame first.
     public static func setAlarmPayload(epochSec: UInt32) -> [UInt8] {
         [0x01,
          UInt8(epochSec & 0xFF),

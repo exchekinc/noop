@@ -326,10 +326,18 @@ private fun VitalitySection(vm: AppViewModel, days: List<DailyMetric>, profile: 
         val rhrs = last7.mapNotNull { it.restingHr }.map { it.toDouble() }
         val steps = last7.mapNotNull { it.steps }.map { it.toDouble() }
         fun mean(a: List<Double>): Double? = if (a.isEmpty()) null else a.average()
+        // Match the STORED headline's aggregation (IntelligenceEngine.medianOfDoubles): median resting HR +
+        // HRV (robust to one outlier night), mean sleep + steps — so this "what's driving it" breakdown
+        // reconciles with the Vitality / Body Age number it explains rather than drifting on the mean (review).
+        fun median(a: List<Double>): Double? {
+            if (a.isEmpty()) return null
+            val s = a.sorted(); val n = s.size
+            return if (n % 2 == 1) s[n / 2] else (s[n / 2 - 1] + s[n / 2]) / 2.0
+        }
         VitalityEngine.contributions(VitalityEngine.Inputs(
-            chronoAge = profile.age.toDouble(), restingHR = mean(rhrs), sleepHours = mean(nights),
+            chronoAge = profile.age.toDouble(), restingHR = median(rhrs), sleepHours = mean(nights),
             sleepConsistency = VitalityEngine.sleepConsistency(nights),
-            rmssd = mean(hrvs), rmssdNorm = VitalityEngine.rmssdNorm(profile.age.toDouble()), steps = mean(steps)))
+            rmssd = median(hrvs), rmssdNorm = VitalityEngine.rmssdNorm(profile.age.toDouble()), steps = mean(steps)))
     }
     val v = vitality; val ba = bodyAge
     if (v != null && ba != null) {

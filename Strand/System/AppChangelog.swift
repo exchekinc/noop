@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "4.0.0"
+    static let currentVersion = "4.0.1"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,18 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "4.0.1",
+            title: "Today's Effort goes live — plus sleep & alarm honesty",
+            date: "June 2026",
+            items: [
+                "**Today's Effort now updates live through the day.** The Effort ring recomputes over today's heart rate as it happens (midnight → now), instead of showing yesterday's completed-day value — or a stale 0.0 early in the morning — until the next full re-score. Thanks @rad182 (#402).",
+                "**Editing a sleep time can't scramble the night any more.** The wake picker now keeps the night on its own day, so correcting a bed/wake time re-derives that night's stages cleanly instead of splitting the corrected block and its totals across two days. Resting-HR + HRV day-bucketing was also aligned across Mac, iPhone and Android. Thanks @ujix (#406).",
+                "**Late nights and long lie-ins are captured** — the sleep-detection window was widened so a wake after noon isn't cut short. Thanks @ujix (#425).",
+                "**Smart alarm is now honestly flagged experimental.** The strap acknowledges the alarm, but a strap-driven wake hasn't been verified firing yet — on WHOOP 4.0 *or* 5/MG — so the app now asks you to keep a backup alarm while we confirm the exact firmware buzz pattern. Thanks Kaliarti (#428).",
+                "**Android: rename your WHOOP's Bluetooth name** — brings Android up to the iPhone/Mac feature. Thanks @cbarrado (#422).",
+                "**Polish from a full code review:** your Vitality breakdown now reconciles exactly with the Body Age number it explains; the new Age cards always compute on Android (the age control is bounded like iPhone/Mac); renaming no longer spins forever if your strap doesn't answer; and live workout detection now covers the whole calendar day. Thanks @rad182, @cbarrado, @j0b-dev.",
+            ]),
         Release(
             version: "4.0.0",
             title: "Your Fitness Age, Vitality & Body Age",

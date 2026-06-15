@@ -17,6 +17,31 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 4.0.1 — Today's Effort goes live, plus sleep & alarm honesty
+
+A fix release following a full code review of the v4 line.
+
+- **Today's Effort now updates live through the day.** The Effort ring recomputes over today's heart rate
+  as it happens (midnight → now), instead of showing yesterday's completed-day value — or a stale 0.0 early
+  in the morning — until the next full re-score. Thanks @rad182 ([#402](https://github.com/NoopApp/noop/issues/402)).
+- **Editing a sleep time can't scramble the night any more.** The wake picker keeps the night on its own
+  day, so correcting a bed/wake time re-derives that night's stages cleanly instead of splitting the
+  corrected block and its totals across two days. Resting-HR + HRV day-bucketing was also aligned across
+  Mac, iPhone and Android. Thanks @ujix ([#406](https://github.com/NoopApp/noop/issues/406)).
+- **Late nights and long lie-ins are captured** — the sleep-detection window was widened so a wake after
+  noon isn't cut short. Thanks @ujix ([#425](https://github.com/NoopApp/noop/pull/425)).
+- **Smart alarm is now honestly flagged experimental.** The strap acknowledges the alarm, but a
+  strap-driven wake hasn't been verified firing yet — on WHOOP 4.0 *or* 5/MG — so the app asks you to keep
+  a backup alarm while we confirm the exact firmware buzz pattern. Thanks Kaliarti ([#428](https://github.com/NoopApp/noop/issues/428)).
+- **Android: rename your WHOOP's Bluetooth name** — brings Android up to the iPhone/Mac feature. Thanks
+  @cbarrado ([#422](https://github.com/NoopApp/noop/pull/422)).
+- **Polish from the review:** your Vitality breakdown now reconciles exactly with the Body Age number it
+  explains; the new Age cards always compute on Android (the age control is bounded like iPhone/Mac);
+  renaming no longer spins forever if your strap doesn't answer; live workout detection now covers the
+  whole calendar day. Thanks @rad182, @cbarrado, @j0b-dev.
+
+---
+
 ## 4.0.0 — Your Fitness Age, Vitality and Body Age
 
 NOOP's new **Age & Longevity engine** — the headline of v4. Three new on-device numbers, all computed

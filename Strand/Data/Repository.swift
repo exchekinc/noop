@@ -333,9 +333,15 @@ final class Repository: ObservableObject {
     }
 
     /// Same precedence for sleep sessions, keyed by the day the night ends on.
+    /// Keys through `AnalyticsEngine.dayString(_:offsetSec:)` — the canonical LOCAL-day keyer
+    /// `analyzeDay` attributes sessions with — NOT the unzoned `Repository.dayFormatter`, which formats
+    /// in whatever the live device zone is and so disagreed with the engine's cached-offset attribution
+    /// across a midnight boundary for non-UTC users (the Swift half of #406; mirrors the Android #304 fix
+    /// pinned by MergeSleepLocalDayTest).
     private static func mergeSleep(imported: [CachedSleepSession], computed: [CachedSleepSession]) -> [CachedSleepSession] {
         func endDay(_ s: CachedSleepSession) -> String {
-            dayString(Date(timeIntervalSince1970: TimeInterval(s.endTs)))
+            let offsetSec = TimeZone.current.secondsFromGMT(for: Date(timeIntervalSince1970: TimeInterval(s.endTs)))
+            return AnalyticsEngine.dayString(s.endTs, offsetSec: offsetSec)
         }
         var byDay: [String: CachedSleepSession] = [:]
         for s in computed { byDay[endDay(s)] = s }

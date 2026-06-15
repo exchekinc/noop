@@ -368,8 +368,11 @@ fun SettingsScreen(vm: AppViewModel) {
                     StepperField(
                         value = profile.age.toString(),
                         accessibility = "Age, ${profile.age} years",
-                        onMinus = { mutate { profile.age -= 1 } },
-                        onPlus = { mutate { profile.age += 1 } },
+                        // Bound to 13..100 to match iOS — and, since v4, age feeds the Fitness Age + Vitality
+                        // engines which gate on age > 0, an unbounded stepper let an Android user drive age to
+                        // 0/negative and silently switch both cards off with no explanation (code review).
+                        onMinus = { mutate { profile.age = (profile.age - 1).coerceIn(13, 100) } },
+                        onPlus = { mutate { profile.age = (profile.age + 1).coerceIn(13, 100) } },
                     )
                 }
                 RowDivider()

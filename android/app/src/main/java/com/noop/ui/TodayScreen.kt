@@ -154,6 +154,9 @@ fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
     // Effort display scale (#268) — drives the Effort tile's value + caption. Display-only.
     val effortScale = UnitPrefs.effortScale(context)
     val profileWeightKg = remember { ProfileStore.from(context).weightKg }
+    // Body profile for the live Effort computation below — age/sex/HR-max-override drive the same
+    // StrainScorer call the daily pass uses. Read once like every other Settings-backed value. (#402)
+    val profileStore = remember { ProfileStore.from(context) }
 
     // Editable Key-Metrics layout (#251) — an ordered list of the enabled tiles, persisted display-only.
     // SharedPreferences isn't reactive, so it's mirrored into local state and re-read when the editor saves.
@@ -220,6 +223,36 @@ fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
                 .values.associate { it.first to it.second }
         }.getOrDefault(emptyMap())
         restScoreForDay = byDay[selectedDayKey] ?: byDay.entries.maxByOrNull { it.key }?.value
+    }
+
+    // LIVE in-progress Effort for TODAY (#402) — mirrors the iOS TodayView live-Effort fix. The stored
+    // `day?.strain` lags: early in the day it shows yesterday's completed Effort (or a stale 0.0) until the
+    // heavy daily pass re-scores. So for offset 0 only, integrate today's raw HR over the SAME window the
+    // HR trend uses (the logical day's local-midnight → now) through StrainScorer with the SAME params the
+    // daily pass persists (Tanaka HR-max from age — or the manual override — the day's resting HR else the
+    // default, profile sex), and prefer it on the Effort gauge. StrainScorer returns null below
+    // `minReadings`, so before there's enough HR the gauge falls back to the stored value and never shows a
+    // fabricated number. Any past day → null (the gauge uses the stored strain). Keyed on the same inputs
+    // as the day-scoped loads so it reloads as the selector moves and as a sync/import grows the HR window.
+    var liveTodayStrain by remember { mutableStateOf<Double?>(null) }
+    LaunchedEffect(days, selectedDayKey, selectedDayOffset) {
+        liveTodayStrain = if (selectedDayOffset == 0) {
+            val zone = ZoneId.systemDefault()
+            val start = selectedDay.atStartOfDay(zone).toEpochSecond()
+            val now = System.currentTimeMillis() / 1000
+            val todayHr = runCatching { viewModel.repo.hrSamples("my-whoop", start, now) }.getOrDefault(emptyList())
+            // effMaxHR resolution matches AnalyticsEngine: manual HR-max override first, else Tanaka from age.
+            val effMaxHR = profileStore.hrMaxOverride.takeIf { it > 0 }?.toDouble()
+                ?: if (profileStore.age > 0) StrainScorer.tanakaHRmax(profileStore.age.toDouble()) else null
+            StrainScorer.strain(
+                hr = todayHr,
+                maxHR = effMaxHR,
+                restingHR = displayMetric?.restingHr?.toDouble() ?: StrainScorer.defaultRestingHR,
+                sex = profileStore.sex,
+            )
+        } else {
+            null
+        }
     }
 
     // Recovery cold-start: recovery is null until the HRV baseline crosses the seed gate
@@ -372,12 +405,14 @@ fun TodayScreen(viewModel: AppViewModel, onSupport: () -> Unit = {}) {
             recoveryCalibration = recoveryCalibration,
         )
 
-        // The three daily scores as layered ring gauges over a scenic Charge-tinted backdrop.
+        // The three daily scores as layered ring gauges over a scenic Charge-tinted backdrop. The Effort
+        // gauge prefers the live in-progress strain for today, falling back to the stored value (#402).
         ScoreHeroRow(
             day = displayMetric,
             restScore = restScoreForDay,
             recoveryCalibration = recoveryCalibration,
             effortScale = effortScale,
+            liveTodayStrain = if (selectedDayOffset == 0) liveTodayStrain else null,
             onScoreInfo = openGuide,
         )
 
@@ -558,10 +593,14 @@ private fun ScoreHeroRow(
     restScore: Double?,
     recoveryCalibration: Int?,
     effortScale: EffortScale,
+    liveTodayStrain: Double? = null,
     onScoreInfo: (ScoreSection) -> Unit,
 ) {
     val recovery = day?.recovery
-    val strain = day?.strain
+    // Prefer the live in-progress Effort for today; fall back to the stored daily strain otherwise. The
+    // effective value drives the gauge number AND the has-data / "—" branch, so the ring only reads "No
+    // Data" when neither a live nor a stored Effort exists. Mirrors the iOS live-Effort gauge. (#402)
+    val strain = liveTodayStrain ?: day?.strain
     Box(
         modifier = Modifier
             .fillMaxWidth()

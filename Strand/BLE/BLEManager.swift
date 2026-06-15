@@ -1228,6 +1228,16 @@ public final class BLEManager: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(2)) { [weak self] in
             self?.requestAdvertisingName()
         }
+        // Timeout so the card can't hang on "Renaming…" forever. Some WHOOP 4.0 firmware never returns the
+        // SET_ADVERTISING_NAME COMMAND_RESPONSE that clears this status (it just reboots, or swallows the
+        // command) — the reporter on #428 sat on a permanent "Renaming…". If nothing has updated the status
+        // by now, surface an honest fallback instead of an endless spinner. A real ack or the reconnect
+        // re-read overwrites this the moment it arrives.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(8)) { [weak self] in
+            guard let self, self.state.renameStatus == "Renaming…" else { return }
+            self.state.renameStatus = "Rename sent — reconnect your strap to confirm the new name."
+            self.log("Strap rename: no ack within 8s — firmware may apply it on reboot/reconnect.")
+        }
     }
 
     private func startKeepAlive() {

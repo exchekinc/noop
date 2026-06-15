@@ -58,6 +58,13 @@ struct TodayView: View {
     // used to anchor the recovery marker at wake time (WHOOP-style Overview HR annotations).
     @State private var sleepToday: CachedSleepSession?
 
+    // TODAY's in-progress Effort (NOOP 0–100 axis), recomputed over the day's HR (local-midnight→now)
+    // each load so the gauge tracks today as it accumulates rather than waiting on the heavy daily pass
+    // to persist — which early in the day would otherwise surface yesterday's completed Effort or a stale
+    // 0.0 (#402). nil below StrainScorer.minReadings (we then fall back to the stored daily row) and on
+    // any navigated past day (those use the stored value).
+    @State private var liveTodayStrain: Double?
+
     // The HR chart's x-axis window. Today → midnight…now; a navigated PAST day → the full calendar
     // day (midnight…next midnight) so a morning with no banked data reads as empty space rather than
     // the axis silently starting at the first sample (#overview-hr gap clarity).
@@ -698,10 +705,10 @@ struct TodayView: View {
                             strain: effortGaugeValue(d) ?? 0,
                             outOf: effortGaugeMax, diameter: dia,
                             lineWidth: dia * 10 / 96,
-                            showsLabel: d?.strain != nil, showsHover: d?.strain != nil,
-                            valueFormat: { _ in UnitFormatter.effortDisplay(d?.strain ?? 0, scale: effortScale) }
+                            showsLabel: effortStrain(d) != nil, showsHover: effortStrain(d) != nil,
+                            valueFormat: { _ in UnitFormatter.effortDisplay(effortStrain(d) ?? 0, scale: effortScale) }
                         )
-                        if d?.strain == nil { ringNoData() }
+                        if effortStrain(d) == nil { ringNoData() }
                     }
                 }
                 // REST — sleep composite 0–100, reusing the recovery ring's scale.
@@ -750,12 +757,23 @@ struct TodayView: View {
         }
     }
 
-    /// Strain value to feed the Effort gauge, on the SELECTED display scale (#313). The stored
+    /// The effective Effort strain (NOOP 0–100 axis) the gauge shows. For TODAY this prefers the live
+    /// in-progress value computed over the day's HR (midnight→now) in `loadAll`, so the gauge reflects
+    /// the accumulating day rather than the last persisted daily row — which only refreshes when the
+    /// heavy daily pass runs, so early in the day the stored row is yesterday's Effort or a stale 0.0
+    /// (#402). Falls back to the stored `strain` when there isn't yet enough of today's HR to score
+    /// (StrainScorer.minReadings). Navigated past days always use the stored row.
+    private func effortStrain(_ d: DailyMetric?) -> Double? {
+        if selectedDayOffset == 0, let live = liveTodayStrain { return live }
+        return d?.strain
+    }
+
+    /// Strain value to feed the Effort gauge, on the SELECTED display scale (#313). The effective
     /// `strain` is on NOOP's 0–100 Effort axis; `UnitFormatter.effortValue` converts it to the
     /// user's chosen scale (0–100 native, or ×21/100 down to WHOOP's 0–21) so the arc + number
     /// match the rest of the app's Effort read-outs. Pairs with `effortGaugeMax` for the "of N".
     private func effortGaugeValue(_ d: DailyMetric?) -> Double? {
-        d?.strain.map { UnitFormatter.effortValue($0, scale: effortScale) }
+        effortStrain(d).map { UnitFormatter.effortValue($0, scale: effortScale) }
     }
 
     /// The Effort gauge's scale maximum — 100 on NOOP's native axis, 21 on the WHOOP axis. Drives
@@ -1240,6 +1258,21 @@ struct TodayView: View {
             : Int((Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart).timeIntervalSince1970)
         hrPoints = await repo.hrBuckets(from: windowStart, to: windowEnd, bucketSeconds: 300)
             .map { TrendPoint(date: Date(timeIntervalSince1970: TimeInterval($0.ts)), value: $0.bpm) }
+
+        // In-progress Effort for TODAY (#402): score today's strain over the SAME window the HR curve
+        // above shows (logical-day midnight → now) so the gauge tracks the day live instead of lagging
+        // on the last persisted daily row. Uses the identical params the daily pass uses — Tanaka HRmax
+        // from age, today's resting HR (else the default), sex — so the live number matches what the
+        // engine will eventually persist. Below StrainScorer.minReadings the scorer returns nil and the
+        // gauge falls back to the stored row (never a fabricated value); a navigated past day clears it.
+        if selectedDayOffset == 0 {
+            let todayHr = await repo.hrSamples(from: windowStart, to: windowEnd)
+            let maxHR = profile.age > 0 ? StrainScorer.tanakaHRmax(age: Double(profile.age)) : nil
+            let restHR = displayDay?.restingHr.map(Double.init) ?? StrainScorer.defaultRestingHR
+            liveTodayStrain = StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR, sex: profile.sex)
+        } else {
+            liveTodayStrain = nil
+        }
         // Pin the chart axis to the loaded window — today midnight→now, a past day the full 24h — so
         // a gap (e.g. a morning the strap wasn't banking) shows as empty space, not a late start.
         hrAxis = Date(timeIntervalSince1970: TimeInterval(windowStart))
