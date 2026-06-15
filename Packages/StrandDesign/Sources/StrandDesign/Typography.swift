@@ -78,6 +78,13 @@ public enum StrandFont {
     /// `overlineText(_:)` does it for you). Sparing ALL-CAPS labels. Scales with Dynamic Type.
     public static let overline = helveticaScaled(11, weight: .bold, relativeTo: .caption2)
 
+    /// `overline` at a custom point size — same Helvetica face, weight and Dynamic-Type scaling
+    /// (relativeTo `.caption2`), just smaller. Passing 11 returns exactly `.overline`. Lets a caller
+    /// shrink an ALL-CAPS label to fit a small container without losing accessibility text-scaling.
+    public static func overlineScaled(_ size: CGFloat) -> Font {
+        helveticaScaled(size, weight: .bold, relativeTo: .caption2)
+    }
+
     /// Mono 13 (SF Mono) — raw / log views. Tabular by nature.
     public static let mono = Font.system(size: 13, weight: .regular, design: .monospaced)
 

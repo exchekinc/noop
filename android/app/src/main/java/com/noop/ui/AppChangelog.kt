@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "3.7.0"
+    const val CURRENT_VERSION = "3.7.1"
 
     data class Release(
         val version: String,
@@ -36,6 +36,15 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "3.7.1",
+            title = "Tidier Today gauges",
+            date = "June 2026",
+            items = listOf(
+                "iPhone/Mac: the three Charge / Effort / Rest rings on Today no longer render squished with their state word overlapping the arc on larger iPhones — each ring sizes to its card and the labels scale to fit. Thanks @claypilat (#403).",
+                "Under the hood: groundwork for connecting more than one device — no change to your current setup.",
+            ),
+        ),
         Release(
             version = "3.7.0",
             title = "A round of fixes — steps, Insights & Health setup",

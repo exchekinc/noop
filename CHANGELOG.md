@@ -17,6 +17,13 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 3.7.1 — Tidier Today gauges
+
+- **iPhone/Mac — Today gauges no longer squish (#403):** on larger iPhones the three **Charge / Effort / Rest** synthesis rings rendered cramped, with each ring's state word (LOW / MODERATE / PEAK) overflowing the arc and colliding with the number. Each ring now sizes to its actual card width (with its line width scaling to match), and the state word scales with the ring — pinned to its original size on the big single-score rings (byte-identical there) and shrinking only on the small three-up rings, while keeping Dynamic-Type accessibility scaling. Android's gauges were already responsive, so this is an iPhone/Mac fix. Thanks @claypilat.
+- **Under the hood:** groundwork for connecting more than one device (a device registry + single-active rule + per-day source ownership), shipped behaviour-neutral — no change to your current WHOOP setup. WHOOP support remains the priority.
+
+---
+
 ## 3.7.0 — A round of fixes: steps, Insights & Health setup
 
 - **Step calibration goes further (#132):** on a WHOOP 5/MG the strap's motion counter can over-report steps by 20× or more, and the per-user calibration divider used to stop at 4×. It now goes all the way to **30×**, and the +/− control uses a variable increment (fine around the 1.0 default, coarser up in the 20s) so a large correction takes a few taps instead of dozens. Floor stays 0.5×; same on iPhone, Mac and Android. Thanks @exzanimo.

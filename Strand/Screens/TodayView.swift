@@ -681,23 +681,23 @@ struct TodayView: View {
                 .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
             LazyVGrid(columns: cols, spacing: NoopMetrics.gap) {
                 // CHARGE — recovery 0–100. Honest empty / calibrating overlay when nil.
-                heroScoreCell(domain: .charge, section: .charge) {
+                heroScoreCell(domain: .charge, section: .charge) { dia in
                     ZStack {
                         RecoveryRing(
-                            score: score ?? 0, diameter: 96,
-                            lineWidth: 10,
+                            score: score ?? 0, diameter: dia,
+                            lineWidth: dia * 10 / 96,
                             showsLabel: score != nil, showsWordmark: false, showsHover: score != nil
                         )
                         if score == nil { ringEmptyOverlay(d: d) }
                     }
                 }
                 // EFFORT — strain on the gauge, honouring the 0–100 / WHOOP-0–21 toggle (#313).
-                heroScoreCell(domain: .effort, section: .effort) {
+                heroScoreCell(domain: .effort, section: .effort) { dia in
                     ZStack {
                         StrainGauge(
                             strain: effortGaugeValue(d) ?? 0,
-                            outOf: effortGaugeMax, diameter: 96,
-                            lineWidth: 10,
+                            outOf: effortGaugeMax, diameter: dia,
+                            lineWidth: dia * 10 / 96,
                             showsLabel: d?.strain != nil, showsHover: d?.strain != nil,
                             valueFormat: { _ in UnitFormatter.effortDisplay(d?.strain ?? 0, scale: effortScale) }
                         )
@@ -705,11 +705,11 @@ struct TodayView: View {
                     }
                 }
                 // REST — sleep composite 0–100, reusing the recovery ring's scale.
-                heroScoreCell(domain: .rest, section: .rest) {
+                heroScoreCell(domain: .rest, section: .rest) { dia in
                     ZStack {
                         RecoveryRing(
-                            score: restScore ?? 0, diameter: 96,
-                            lineWidth: 10,
+                            score: restScore ?? 0, diameter: dia,
+                            lineWidth: dia * 10 / 96,
                             showsLabel: restScore != nil, showsWordmark: false, showsHover: restScore != nil,
                             valueFormat: { "Rest \(Int($0.rounded()))" }
                         )
@@ -722,9 +722,13 @@ struct TodayView: View {
     }
 
     /// One score-ring cell: a frosted tinted card carrying the ring + a domain label + the ⓘ.
+    /// The ring is sized to the cell's ACTUAL width (capped at 96, with a small inset) rather than a
+    /// hard 96pt — three rings share a phone width, so a fixed 96 overflowed the ~73–94pt cells (worse
+    /// on small phones / Display Zoom), pressing the arcs against the card edges. The closure receives
+    /// the resolved diameter so the gauge + its line width scale together. Thanks @claypilat (#403).
     @ViewBuilder
     private func heroScoreCell<RingBody: View>(domain: DomainTheme, section: ScoreSection,
-                                               @ViewBuilder ring: @escaping () -> RingBody) -> some View {
+                                               @ViewBuilder ring: @escaping (CGFloat) -> RingBody) -> some View {
         NoopCard(padding: 12, tint: domain.color) {
             VStack(spacing: 8) {
                 Text(domain.rawValue.capitalized)
@@ -732,7 +736,14 @@ struct TodayView: View {
                     .tracking(StrandFont.overlineTracking)
                     .textCase(.uppercase)
                     .foregroundStyle(domain.color)
-                ring().frame(maxWidth: .infinity)
+                GeometryReader { geo in
+                    // Size the ring to the cell; the ring is intrinsically dia×dia, so just CENTER it —
+                    // don't clamp the ZStack to dia (that would wrap the calibrating / no-data overlay
+                    // text, which is wider than the ring).
+                    let dia = min(96, max(52, geo.size.width - 8))
+                    ring(dia).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(height: 96)   // reserve the max ring box so card heights stay uniform
             }
             .frame(maxWidth: .infinity)
             .overlay(alignment: .topTrailing) { scoreInfoButton(section) }

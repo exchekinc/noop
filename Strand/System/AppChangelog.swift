@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "3.7.0"
+    static let currentVersion = "3.7.1"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,14 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "3.7.1",
+            title: "Tidier Today gauges",
+            date: "June 2026",
+            items: [
+                "**iPhone/Mac:** the three **Charge / Effort / Rest** rings on Today no longer render squished, with their state word (LOW / MODERATE / PEAK) overlapping the arc, on larger iPhones. Each ring now sizes to its card and the labels scale to fit (still full-size on the big single-score rings, and still scaling with your accessibility text size). Thanks @claypilat (#403).",
+                "**Under the hood:** groundwork for connecting more than one device — no change to your current setup.",
+            ]),
         Release(
             version: "3.7.0",
             title: "A round of fixes — steps, Insights & Health setup",
